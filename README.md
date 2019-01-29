@@ -31,6 +31,8 @@ Execute the following command in your terminal to clone the course and access th
 ```
 git clone https://github.com/justinmoon/network-programming.git
 cd network-programming
+python3 -m venv venv
+source venv/bin/activate
 python3 -m pip install -r requirements.txt
 jupyter notebook
 ```
