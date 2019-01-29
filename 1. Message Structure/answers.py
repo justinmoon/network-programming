@@ -33,17 +33,64 @@ def is_verack_msg(stream):
     command = read_command(stream)
     return "FIXME"
 
-# Ex x: little lndian to int
+# Ex 4: Read message length
 
-def little_endian_to_int(b):
-    return int.from_bytes(b, 'little')
+def read_length(stream):
+    raw = stream.read(4)
+    length = int.from_bytes(raw, 'little')
+    return length
 
+# Ex 5: Read checksum
 
+def read_checksum(stream):
+    return stream.read(4)
 
-################
-### Homework ###
-################
+# Ex 6: Read payload
 
+def read_payload(stream, length):
+    return stream.read(length)
+
+# Ex 7: Double SHA256
+
+def hash256(b):
+    first_round = sha256(b).digest()
+    second_round = sha256(first_round).digest()
+    return second_round
+
+# Ex 8: Compute checksum
+
+def compute_checksum(b):
+    hashed = hash256(b)
+    first_four_bytes = hashed[:4]
+    return first_four_bytes
+
+# Ex 9: Bad magic throws error
+
+def read_message(stream):
+    magic = read_magic(stream)
+    if magic != NETWORK_MAGIC:
+        raise RuntimeError('Network magic is wrong')
+    command = read_command(stream)
+    length = read_length(stream)
+    checksum = read_checksum(stream)
+    payload = read_payload(stream, length)
+    return command, payload
+
+# Ex 10: Bad checksum throws error
+
+def read_message(stream):
+    magic = read_magic(stream)
+    if magic != NETWORK_MAGIC:
+        raise RuntimeError('Network magic is wrong')
+    command = read_command(stream)
+    length = read_length(stream)
+    checksum = read_checksum(stream)
+    payload = read_payload(stream, length)
+    if checksum != compute_checksum(payload):
+        raise RuntimeError("Checksums don't match")
+    return command, payload
+
+# Ex 11: The final `NetworkEnvelope` class
 
 class NetworkEnvelope:
 
@@ -53,23 +100,22 @@ class NetworkEnvelope:
 
     @classmethod
     def from_stream(cls, stream):
-        magic = stream.read(4)
+        magic = read_magic(stream)
         if magic != NETWORK_MAGIC:
             raise RuntimeError('Network magic is wrong')
-
-        command = stream.read(12).strip(b"\x00")
-        payload_length = int.from_bytes(stream.read(4), 'little')
-        checksum = stream.read(4)
-        payload = stream.read(payload_length)
-
-        if checksum != calculate_checksum(payload):
+        command = read_command(stream)
+        length = read_length(stream)
+        checksum = read_checksum(stream)
+        payload = read_payload(stream, length)
+        if checksum != compute_checksum(payload):
             raise RuntimeError("Checksums don't match")
-
         return cls(command, payload)
-
-    def serialize(self):
-        raise NotImplementedError()
 
     def __repr__(self):
         return f"<Message command={self.command}>"
+
+################
+### Homework ###
+################
+
 
