@@ -37,6 +37,5 @@ python3 -m pip install -r requirements.txt
 jupyter notebook
 ```
 
-This will open up your web browser to a page that looks like the image below. This is [Jupyter Notebook](http://jupyter.org/), which is basically a little website that’s run on only your computer. Click the “Lesson 0 - Introduction to Jupyter.ipynb” link to learn more!
+This will open up your web browser to a page that looks like the image below. This is [Jupyter Notebook](http://jupyter.org/), which is basically a little website that’s run on only your computer. Open the `1.\ Message\ Structure/Lesson.ipynb` file to get started!
 
-![image](./images/jupyter.png)
