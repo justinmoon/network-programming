@@ -1,3 +1,8 @@
+
+##############
+### Lesson ###
+##############
+
 # Ex 1: Ping-Pong
 
 import socket
@@ -118,4 +123,204 @@ class NetworkEnvelope:
 ### Homework ###
 ################
 
+###
+### `bites` -> `int`
+###
 
+# Step 1: decimal_places_to_int
+
+def decimal_places_to_int(places):
+    total = 0
+    for exponent, coefficient in enumerate(reversed(places)):
+        total += coefficient * 10 ** exponent
+    return total
+
+# Step 2: base_256_places_to_int
+
+def base_256_places_to_int(places):
+    total = 0
+    for exponent, coefficient in enumerate(reversed(places)):
+        total += coefficient * 256 ** exponent
+    return total
+
+# Step 3: places_to_int(places, base)
+
+def places_to_int(places, base):
+    total = 0
+    for exponent, coefficient in enumerate(reversed(places)):
+        total += coefficient * base ** exponent
+    return total
+
+# Step 4: places_to_int(places, base, byte_order)
+
+def places_to_int(places, base, byte_order):
+    if byte_order not in ['little', 'big']:
+        raise ValueError("Invalid byte order")
+    total = 0
+    if byte_order == 'big':
+        places = reversed(places)
+    for exponent, coefficient in enumerate(places):
+        total += coefficient * base ** exponent
+    return total
+
+# Step 5: bites.to_int(base, byte_order)
+
+class bites:
+
+    def __init__(self, values):
+        self.values = values
+
+    def __repr__(self):
+        return "(cheating) " + repr(self.values)
+
+    def to_int(self, byte_order):
+        return places_to_int(self.values, 256, byte_order)
+
+    @classmethod
+    def from_int(cls, n, length, byte_order):
+        raise NotImplementedError()
+
+###
+### `int` -> `bites`
+###
+
+# get_ones_place()
+
+def get_ones_place():
+    return N % 256
+
+# get_65536s_place()
+
+def get_65536s_place():
+    return N // 256 // 256 % 256
+
+# Step 1: int_to_base_256_places(n)
+
+# TODO: give them this hint
+
+def int_to_base_256_places(n):
+    places = []
+    while n > 0:
+        places.insert(0, "FIXME")
+        n = "FIXME"
+    return places
+
+# Then this answer
+
+def int_to_base_256_places(n):
+    places = []
+    while n > 0:
+        places.insert(0, n % 256)
+        n = n // 256
+    return places
+
+# Step 2: int_to_places(n, base)
+
+def int_to_places(n, base):
+    places = []
+    while n > 0:
+        places.insert(0, n % base)
+        n = n // base
+    return places
+
+# Step 3: int_to_places(n, base, length)
+
+def int_to_places(n, base, length):
+    places = []
+    while len(places) < length:
+        places.insert(0, n % base)
+        n = n // base
+    if n != 0:
+        raise ValueError("Doesn't fit")
+    return places
+
+# Step 4: int_to_places(n, base, length, byte_order)
+
+def int_to_places(n, base, length, byte_order):
+    if byte_order not in ['little', 'big']:
+        raise ValueError("Invalid byte order")
+    places = []
+    while len(places) < length:
+        places.insert(0, n % base)
+        n = n // base
+    if n != 0:
+        raise ValueError("Doesn't fit")
+    if byte_order == "little":
+        places.reverse()
+    return places
+
+# Step 5: bites.from_int(n, length, byte_order)
+
+class bites:
+
+    def __init__(self, values):
+        self.values = values
+
+    def __repr__(self):
+        return "(cheating) " + repr(self.values)
+
+    def to_int(self, byte_order):
+        return places_to_int(self.values, 256, byte_order)
+
+    @classmethod
+    def from_int(cls, n, length, byte_order):
+        places = int_to_places(n, 256, length, byte_order)
+        return cls(places)
+
+###
+### `bites.__repr__`
+###
+
+# represent()
+
+# Hint
+
+def represent(b):
+    result = ""
+    for n in b.values:
+        if n in special_chars:
+            result += ?
+        else:
+            result += ?
+    return result
+
+# Answer
+
+def represent(b):
+    result = ""
+    for n in b.values:
+        if n in special_chars:
+            result += special_chars[n]
+        else:
+            result += '\\x' + hex(n)[2:]
+    return result
+
+# `bites.__repr__`
+
+class bites:
+
+    def __init__(self, values):
+        self.values = values
+
+    def __eq__(self, other):
+        return self.values == other.values
+
+    def __repr__(self):
+        result = ""
+        for n in self.values:
+            if n in special_chars:
+                result += special_chars[n]
+            else:
+                result += '\\x' + hex(n)[2:]
+        return result
+
+    def to_int(self, byte_order):
+        return places_to_int(self.values, 256, byte_order)
+
+    @classmethod
+    def from_int(cls, n, length, byte_order):
+        places = int_to_places(n, 256, length, byte_order)
+        return cls(places)
+
+    def strip(self, pattern):
+        return bites(list(bytes(self.values).strip(pattern)))
