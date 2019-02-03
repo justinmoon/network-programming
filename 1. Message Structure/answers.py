@@ -292,7 +292,7 @@ def represent(b):
         if n in special_chars:
             result += special_chars[n]
         else:
-            result += '\\x' + hex(n)[2:]
+            result += '\\x' + f"{n:02x}"
     return result
 
 # `bites.__repr__`
