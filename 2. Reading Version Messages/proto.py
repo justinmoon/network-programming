@@ -5,6 +5,7 @@ import hashlib
 from io import BytesIO
 from random import randint
 from base64 import b32decode, b32encode
+from pprint import pprint
 
 
 NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
@@ -94,7 +95,7 @@ def deserialize_address(stream, timestamp):
     r = {}
     if timestamp:
         r["time"] = little_endian_to_int(stream.read(4))
-    r["services"] = stream.read(8)
+    r["services"] = little_endian_to_int(stream.read(8))
     r["ip"] = bytes_to_ip(stream.read(16))
     r["port"] = big_endian_to_int(stream.read(2))
     return r
@@ -105,17 +106,8 @@ def deserialize_version_payload(stream):
     r["version"] = little_endian_to_int(stream.read(4))
     r["services"] = little_endian_to_int(stream.read(8))
     r["timestamp"] = little_endian_to_int(stream.read(8))
-
-    # r["receiver_address"] = deserialize_address(stream, timestamp=False)
-    r["receiver_services"] = little_endian_to_int(stream.read(8))
-    r["receiver_ip"] = bytes_to_ip(stream.read(16))
-    r["receiver_port"] = big_endian_to_int(stream.read(2))
-
-    # r["sender_address"] = deserialize_address(stream, timestamp=False)
-    r["sender_services"] = little_endian_to_int(stream.read(8))
-    r["sender_ip"] = bytes_to_ip(stream.read(16))
-    r["sender_port"] = big_endian_to_int(stream.read(2))
-
+    r["receiver_address"] = deserialize_address(stream, timestamp=False)
+    r["sender_address"] = deserialize_address(stream, timestamp=False)
     r["nonce"] = little_endian_to_int(stream.read(8))
     r["user_agent"] = stream.read(read_varint(stream))
     r["latest_block"] = little_endian_to_int(stream.read(4))
@@ -237,7 +229,8 @@ def handshake(address):
 
     # Step 2: their version message
     msg = deserialize_message(stream)
-    print("Version: ", msg)
+    print("Version: ")
+    pprint(msg)
 
     # Step 3: their version message
     msg = deserialize_message(stream)
