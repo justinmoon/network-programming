@@ -86,6 +86,17 @@ def encode_varint(i):
         raise RuntimeError('integer too large: {}'.format(i))
 
 
+def read_varstr(s):
+    length = read_varint(s)
+    string = s.read(length)
+    return string
+
+
+def encode_varstr(s):
+    length = len(s)
+    return encode_varint(length) + s
+
+
 ###################
 # Deserialization #
 ###################
