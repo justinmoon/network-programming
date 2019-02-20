@@ -5,8 +5,7 @@ import hashlib
 from io import BytesIO
 from random import randint
 from base64 import b32decode, b32encode
-
-import socks
+from pprint import pprint
 
 
 NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
@@ -15,6 +14,7 @@ NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
 # IPV4_PREFIX = b"\x00" * 10 + b"\xff" * 2
 IPV4_PREFIX = b"\x00" * 10 + b"\x00" * 2
 ONION_PREFIX = b"\xFD\x87\xD8\x7E\xEB\x43"  # ipv6 prefix for .onion address
+TIMEOUT = 5
 
 
 def little_endian_to_int(b):
@@ -86,22 +86,87 @@ def encode_varint(i):
         raise RuntimeError('integer too large: {}'.format(i))
 
 
-def read_version_payload(stream):
+def read_varstr(s):
+    length = read_varint(s)
+    string = s.read(length)
+    return string
+
+
+def encode_varstr(s):
+    length = len(s)
+    return encode_varint(length) + s
+
+
+###################
+# Deserialization #
+###################
+
+
+def deserialize_address(stream, timestamp):
+    r = {}
+    if timestamp:
+        r["time"] = little_endian_to_int(stream.read(4))
+    r["services"] = little_endian_to_int(stream.read(8))
+    r["ip"] = bytes_to_ip(stream.read(16))
+    r["port"] = big_endian_to_int(stream.read(2))
+    return r
+
+
+def deserialize_version_payload(stream):
     r = {}
     r["version"] = little_endian_to_int(stream.read(4))
     r["services"] = little_endian_to_int(stream.read(8))
     r["timestamp"] = little_endian_to_int(stream.read(8))
-    r["receiver_services"] = little_endian_to_int(stream.read(8))
-    r["receiver_ip"] = bytes_to_ip(stream.read(16))
-    r["receiver_port"] = big_endian_to_int(stream.read(2))
-    r["sender_services"] = little_endian_to_int(stream.read(8))
-    r["sender_ip"] = bytes_to_ip(stream.read(16))
-    r["sender_port"] = big_endian_to_int(stream.read(2))
+    r["receiver_address"] = deserialize_address(stream, timestamp=False)
+    r["sender_address"] = deserialize_address(stream, timestamp=False)
     r["nonce"] = little_endian_to_int(stream.read(8))
     r["user_agent"] = stream.read(read_varint(stream))
     r["latest_block"] = little_endian_to_int(stream.read(4))
     r["relay"] = little_endian_to_int(stream.read(1))
     return r
+
+
+def deserialize_empty_payload(stream):
+    return {}
+
+
+def deserialize_addr_payload(stream):
+    r = {}
+    count = read_varint(stream)
+    r["addresses"] = [deserialize_address(stream) for _ in range(count)]
+    return r
+
+
+def deserialize_payload(command, stream):
+    command_to_handler = {
+        b"version": deserialize_version_payload,
+        b"verack": deserialize_empty_payload,
+        b"addr": deserialize_addr_payload,
+    }
+    handler = command_to_handler[command]
+    return handler(stream)
+
+
+def deserialize_message(stream):
+    """ payload attributes at top level """
+    msg = {}
+    magic = stream.read(4)
+    if magic != NETWORK_MAGIC:
+        raise Exception(f'Magic is wrong: {magic}')
+    msg['command'] = stream.read(12).strip(b'\x00')
+    payload_length = int.from_bytes(stream.read(4), 'little')
+    checksum = stream.read(4)
+    raw_payload = stream.read(payload_length)
+    calculated_checksum = double_sha256(raw_payload)[:4]
+    if calculated_checksum != checksum:
+        raise Exception('Checksum does not match')
+    msg['payload'] = deserialize_payload(msg['command'], BytesIO(raw_payload))
+    return msg
+
+
+#################
+# Serialization #
+#################
 
 
 def serialize_version_payload(
@@ -110,7 +175,7 @@ def serialize_version_payload(
         receiver_ip='0.0.0.0', receiver_port=8333,
         sender_services=0,
         sender_ip='0.0.0.0', sender_port=8333,
-        nonce=None, user_agent=b'/advancing-bitcoin/',
+        nonce=None, user_agent=b'/buidl-bootcamp/',
         latest_block=0, relay=True):
     if timestamp is None:
         timestamp = int(time.time())
@@ -133,135 +198,115 @@ def serialize_version_payload(
     return result
 
 
-def read_address(stream):
-    r = {}
-    r["time"] = little_endian_to_int(stream.read(4))
-    r["services"] = stream.read(8)
-    r["ip"] = bytes_to_ip(stream.read(16))
-    r["port"] = big_endian_to_int(stream.read(2))
-    return r
+def serialize_empty_payload(**kwargs):
+    return b""
 
 
-def read_addr_payload(stream):
-    r = {}
-    count = read_varint(stream)
-    r["addresses"] = [read_address(stream) for _ in range(count)]
-    return r
-
-
-def read_msg(stream):
-    magic = stream.read(4)
-    if magic != NETWORK_MAGIC:
-        raise Exception(f'Magic is wrong: {magic}')
-    command = stream.read(12)
-    command = command.strip(b'\x00')
-    payload_length = int.from_bytes(stream.read(4), 'little')
-    checksum = stream.read(4)
-    payload = stream.read(payload_length)
-    calculated_checksum = double_sha256(payload)[:4]
-    if calculated_checksum != checksum:
-        raise Exception('Checksum does not match')
-    return {
-        "command": command,
-        "payload": payload,
+def serialize_payload(**kwargs):
+    command_to_handler = {
+        b"version": serialize_version_payload,
+        b"verack": serialize_empty_payload,
+        b"getaddr": serialize_empty_payload,
     }
+    command = kwargs.pop('command')
+    handler = command_to_handler[command]
+    return handler(**kwargs)
 
 
-def serialize_msg(command, payload):
+def serialize_msg(**kwargs):
     result = NETWORK_MAGIC
+    command = kwargs['command']  # popping is weird ...
     result += command + b'\x00' * (12 - len(command))
+    payload = serialize_payload(**kwargs)
     result += int_to_little_endian(len(payload), 4)
     result += double_sha256(payload)[:4]
     result += payload
     return result
 
 
-def make_socket(address):
-    if "onion" not in address[0]:
-        r = socket.getaddrinfo(address[0], address[1], 0, 0, socket.SOL_TCP)
-        sock = socket.socket(r[0][0], r[0][1], r[0][2])
-    else:
-        print("Connecting over tor")
-        proxy = ("127.0.0.1", 9050)
-        timeout = 10
-        socks.setdefaultproxy(socks.PROXY_TYPE_SOCKS5, proxy[0], proxy[1])
-        sock = socks.socksocket()
-        sock.settimeout(timeout)
-    return sock
-
-
-def connect(address):
-    if "onion" not in address[0]:
-        ai = socket.getaddrinfo(address[0], address[1], 0, 0, socket.SOL_TCP)
-        tcp_listing = ai[0]
-        socket_info, connect_info = tcp_listing[:-2], tcp_listing[-1]
-        sock = socket.socket(*socket_info)
-        sock.connect(connect_info)
-    else:
-        proxy = ("127.0.0.1", 9050)
-        timeout = 10
-        socks.setdefaultproxy(socks.PROXY_TYPE_SOCKS5, proxy[0], proxy[1])
-        sock = socks.socksocket()
-        sock.settimeout(timeout)
-        sock.connect(address)
-    return sock
+##############
+# Networking #
+##############
 
 
 def handshake(address):
-    sock = make_socket(address)
-
-    sock.connect(address)
+    sock = socket.create_connection(address, TIMEOUT)
     stream = sock.makefile("rb")
 
-    # Step 1: our version
-    payload = serialize_version_payload()
-    msg = serialize_msg(b"version", payload)
+    # Step 1: our version message
+    msg = serialize_msg(command=b"version")
     sock.sendall(msg)
     print("Sent version")
 
-    # Step 2: their version
-    msg = read_msg(stream)
-    version_payload = read_version_payload(BytesIO(msg["payload"]))
-    print("Received version: ", msg)
+    # Step 2: their version message
+    msg = deserialize_message(stream)
+    print("Version: ")
+    pprint(msg)
 
-    # Step 3: their verack
-    msg = read_msg(stream)
-    print("Received verack: ", msg)
+    # Step 3: their version message
+    msg = deserialize_message(stream)
+    print("Verack: ", msg)
 
     # Step 4: our verack
-    msg = serialize_msg(b"verack", b"")
+    msg = serialize_msg(command=b"verack")
     sock.sendall(msg)
     print("Sent verack")
 
-    return sock, version_payload
+    return sock
 
 
-dns_seeds = [
-    'dnsseed.bitcoin.dashjr.org',
-    'dnsseed.bluematt.me',
-    'seed.bitcoin.sipa.be',
-    'seed.bitcoinstats.com',
-    'seed.bitcoin.sprovoost.nl',
-    'seed.bitnodes.io',
-]
+def simple_crawler():
+    addresses = [
+        ("35.198.151.21", 8333),
+        ("91.221.70.137", 8333),
+        ("92.255.176.109", 8333),
+        ("94.199.178.17", 8333),
+    ]
+    while addresses:
+        start = time.time()
+        address = addresses.pop()
+        print('Connecting to ', address)
 
-
-def fetch_ips(dns_seed):
-    ip_list = []
-    ais = socket.getaddrinfo(dns_seed, 0, 0, 0, 0)
-    for result in ais:
-        ip_list.append(result[-1][0])
-    return list(set(ip_list))
-
-
-def fetch_addresses(dns_seeds):
-    result = []
-    for dns_seed in dns_seeds:
+        # If we can't connect, proceed to next address
         try:
-            ips = fetch_ips(dns_seed)
-            addresses = [(ip, 8333) for ip in ips]
-            result.extend(addresses)
-        except:
-            print(f"Error fetching addresses from {dns_seed}")
+            sock = handshake(address)
+        except Exception as e:
+            print(f"Encountered error: {e}")
+            raise
             continue
-    return result
+
+        # Save the address & version payload
+        # TODO
+        # observe_node(address, version_payload)
+
+        stream = sock.makefile("rb")
+
+        # Request their peer list
+        sock.send(serialize_msg(command=b"getaddr"))
+
+        print("Waiting for addr message")
+        while True:
+            # Only wait 5 seconds for addr message
+            if time.time() - start > 5:
+                break
+
+            # If connection breaks, proceed to next address
+            try:
+                msg = deserialize_message(stream)
+            except:
+                break
+
+            # Only handle "addr" messages
+            if msg["command"] == b"addr":
+                if len(msg["addresses"]) > 1:
+                    addresses.extend([(a["ip"], a["port"])
+                                      for a in msg["addresses"]])
+                    print(f'Received {len(msg["addresses"])} addrs')
+                    break
+            else:
+                print("ignoring ", msg["command"])
+    print("Ran out of addresses. Exiting.")
+
+
+if __name__ == '__main__':
+    simple_crawler()
