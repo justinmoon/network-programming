@@ -102,7 +102,7 @@ def encode_varstr(s):
 ###################
 
 
-def deserialize_address(stream, timestamp):
+def read_address(stream, timestamp):
     r = {}
     if timestamp:
         r["time"] = little_endian_to_int(stream.read(4))
@@ -112,42 +112,42 @@ def deserialize_address(stream, timestamp):
     return r
 
 
-def deserialize_version_payload(stream):
+def read_version_payload(stream):
     r = {}
     r["version"] = little_endian_to_int(stream.read(4))
     r["services"] = little_endian_to_int(stream.read(8))
     r["timestamp"] = little_endian_to_int(stream.read(8))
-    r["receiver_address"] = deserialize_address(stream, timestamp=False)
-    r["sender_address"] = deserialize_address(stream, timestamp=False)
+    r["receiver_address"] = read_address(stream, timestamp=False)
+    r["sender_address"] = read_address(stream, timestamp=False)
     r["nonce"] = little_endian_to_int(stream.read(8))
     r["user_agent"] = stream.read(read_varint(stream))
-    r["latest_block"] = little_endian_to_int(stream.read(4))
+    r["start_height"] = little_endian_to_int(stream.read(4))
     r["relay"] = little_endian_to_int(stream.read(1))
     return r
 
 
-def deserialize_empty_payload(stream):
+def read_empty_payload(stream):
     return {}
 
 
-def deserialize_addr_payload(stream):
+def read_addr_payload(stream):
     r = {}
     count = read_varint(stream)
-    r["addresses"] = [deserialize_address(stream) for _ in range(count)]
+    r["addresses"] = [read_address(stream) for _ in range(count)]
     return r
 
 
-def deserialize_payload(command, stream):
+def read_payload(command, stream):
     command_to_handler = {
-        b"version": deserialize_version_payload,
-        b"verack": deserialize_empty_payload,
-        b"addr": deserialize_addr_payload,
+        b"version": read_version_payload,
+        b"verack": read_empty_payload,
+        b"addr": read_addr_payload,
     }
     handler = command_to_handler[command]
     return handler(stream)
 
 
-def deserialize_message(stream):
+def read_message(stream):
     """ payload attributes at top level """
     msg = {}
     magic = stream.read(4)
@@ -160,7 +160,7 @@ def deserialize_message(stream):
     calculated_checksum = double_sha256(raw_payload)[:4]
     if calculated_checksum != checksum:
         raise Exception('Checksum does not match')
-    msg['payload'] = deserialize_payload(msg['command'], BytesIO(raw_payload))
+    msg['payload'] = read_payload(msg['command'], BytesIO(raw_payload))
     return msg
 
 
@@ -176,7 +176,7 @@ def serialize_version_payload(
         sender_services=0,
         sender_ip='0.0.0.0', sender_port=8333,
         nonce=None, user_agent=b'/buidl-bootcamp/',
-        latest_block=0, relay=True):
+        start_height=0, relay=True):
     if timestamp is None:
         timestamp = int(time.time())
     if nonce is None:
@@ -193,7 +193,7 @@ def serialize_version_payload(
     result += int_to_little_endian(nonce, 8)
     result += encode_varint(len(user_agent))
     result += user_agent
-    result += int_to_little_endian(latest_block, 4)
+    result += int_to_little_endian(start_height, 4)
     result += int_to_little_endian(int(relay), 1)
     return result
 
@@ -239,12 +239,12 @@ def handshake(address):
     print("Sent version")
 
     # Step 2: their version message
-    msg = deserialize_message(stream)
+    msg = read_message(stream)
     print("Version: ")
     pprint(msg)
 
     # Step 3: their version message
-    msg = deserialize_message(stream)
+    msg = read_message(stream)
     print("Verack: ", msg)
 
     # Step 4: our verack
@@ -292,7 +292,7 @@ def simple_crawler():
 
             # If connection breaks, proceed to next address
             try:
-                msg = deserialize_message(stream)
+                msg = read_message(stream)
             except:
                 break
 
