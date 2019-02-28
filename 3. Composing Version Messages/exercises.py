@@ -9,6 +9,9 @@ dummy_address = {
     "port": 8333
 }
 
+def int_to_little_endian(integer, length):
+    raise NotImplementedError()
+
 def serialize_version_payload(
         version=70015, services=0, timestamp=None,
         receiver_address=dummy_address,
