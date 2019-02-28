@@ -27,82 +27,86 @@ def serialize_address(address, has_timestamp):
     return result
 
 def int_to_little_endian(integer, length):
-    return integer.to_bytes(length, 'little')
+    raise NotImplementedError()
 
 def int_to_big_endian(integer, length):
-    return integer.to_bytes(length, 'big')
+    raise NotImplementedError()
     
 def services_dict_to_int(services_dict):
-    key_to_multiplier = {
-        'NODE_NETWORK': 2**0,
-        'NODE_GETUTXO': 2**1,
-        'NODE_BLOOM': 2**2,
-        'NODE_WITNESS': 2**3,
-        'NODE_NETWORK_LIMITED': 2**10,
-    }
-    services_int = 0
-    for key, on_or_off in services_dict.items():
-        services_int += int(on_or_off) * key_to_multiplier.get(key, 0)
-    return services_int
+    raise NotImplementedError()
 
 def bool_to_bytes(bool):
-    return bytes([int(bool)])
+    raise NotImplementedError()
     
 def serialize_varint(i):
-    if i < 0xfd:
-        return bytes([i])
-    elif i < 256**2:
-        return b'\xfd' + int_to_little_endian(i, 2)
-    elif i < 256**4:
-        return b'\xfe' + int_to_little_endian(i, 4)
-    elif i < 256**8:
-        return b'\xff' + int_to_little_endian(i, 8)
-    else:
-        raise RuntimeError('integer too large: {}'.format(i))
+    raise NotImplementedError()
     
 def serialize_varstr(bytes):
-    return serialize_varint(len(bytes)) + bytes
+    raise NotImplementedError()
     
 # Try implementing yourself here:
 # def compute_checksum(bytes):
 #     raise NotImplementedError()
     
 def serialize_version_payload(
-        version=70015, services_dict={}, timestamp=None,
+        version=70015, services=0, timestamp=None,
         receiver_address=dummy_address,
         sender_address=dummy_address,
-        nonce=None, user_agent=b'/buidl-bootcamp/',
+        nonce=None, user_agent=b'/buidl-army/',
         start_height=0, relay=True):
     if timestamp is None:
         timestamp = int(time.time())
     if nonce is None:
         nonce = randint(0, 2**64)
+    # message starts empty, we add to it for every field
     msg = b''
     # version
-    msg += int_to_little_endian(version, 4)
+    msg += ZERO * 4
     # services
-    services = services_dict_to_int(services_dict)
-    msg += int_to_little_endian(services, 8)
+    msg += ZERO * 8
     # timestamp
-    msg += int_to_little_endian(timestamp, 8)
+    msg += ZERO * 8
     # receiver address
-    msg += serialize_address(receiver_address, has_timestamp=False)
+    msg += ZERO * 26
     # sender address
-    msg += serialize_address(sender_address, has_timestamp=False)
+    msg += ZERO * 26
     # nonce
-    msg += int_to_little_endian(nonce, 8)
+    msg += ZERO * 8
     # user agent
-    msg += serialize_varstr(user_agent)
+    msg += ZERO * 1 # zero byte signifies an empty varstr
     # start height
-    msg += int_to_little_endian(start_height, 4)
+    msg += ZERO * 4
     # relay
-    msg += bool_to_bytes(relay)
-    return msg
+    msg += ZERO * 1
+    return msg 
 
-def serialize_message(command, payload=b''):
-    result = b'\xf9\xbe\xb4\xd9'
-    result += command + b'\x00' * (12 - len(command))
-    result += int_to_little_endian(len(payload), 4)
-    result += compute_checksum(payload)
-    result += payload
+def serialize_message(command, payload):
+    result = b'magic bytes'
+    result += b'command bytes'
+    result += b'payload length bytes'
+    result += b'checksum bytes'
+    result += b'payload bytes'
     return result
+
+def handshake(address):
+    sock = socket.create_connection(address, timeout=1)
+    stream = sock.makefile("rb")
+
+    # Step 1: our version message
+    sock.sendall("OUR VERSION MESSAGE")
+    print("Sent version")
+
+    # Step 2: their version message
+    peer_version = "READ THEIR VERSION MESSAGE HERE"
+    print("Version: ")
+    print(peer_version)
+
+    # Step 3: their version message
+    peer_verack = "READ THEIR VERACK MESSAGE HERE"
+    print("Verack: ", peer_verack)
+
+    # Step 4: our verack
+    sock.sendall("OUR VERACK HERE")
+    print("Sent verack")
+
+    return sock, stream
