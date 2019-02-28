@@ -99,6 +99,10 @@ def serialize_varstr(s):
     return serialize_varint(length) + s
 
 
+def bytes_to_bool(bytes):
+    return bool(little_endian_to_int(bytes))
+
+
 ###################
 # Deserialization #
 ###################
@@ -124,7 +128,7 @@ def read_version_payload(stream):
     r["nonce"] = little_endian_to_int(stream.read(8))
     r["user_agent"] = stream.read(read_varint(stream))
     r["start_height"] = little_endian_to_int(stream.read(4))
-    r["relay"] = little_endian_to_int(stream.read(1))
+    r["relay"] = bytes_to_bool(stream.read(1))
     return r
 
 
