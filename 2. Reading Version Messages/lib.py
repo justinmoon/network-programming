@@ -37,6 +37,10 @@ def double_sha256(s):
     return hashlib.sha256(hashlib.sha256(s).digest()).digest()
 
 
+def compute_checksum(s):
+    return double_sha256(s)[:4]
+
+
 def bytes_to_ip(b):
     if b[:6] == ONION_PREFIX:  # Tor
         return b32encode(b[6:]).lower().decode("ascii") + ".onion"
@@ -56,7 +60,6 @@ def ip_to_bytes(ip):
 
 
 def read_varint(s):
-    '''read_varint reads a variable integer from a stream'''
     i = s.read(1)[0]
     if i == 0xfd:
         # 0xfd means the next two bytes are the number
@@ -72,8 +75,7 @@ def read_varint(s):
         return i
 
 
-def encode_varint(i):
-    '''encodes an integer as a varint'''
+def serialize_varint(i):
     if i < 0xfd:
         return bytes([i])
     elif i < 0x10000:
@@ -92,9 +94,13 @@ def read_varstr(s):
     return string
 
 
-def encode_varstr(s):
+def serialize_varstr(s):
     length = len(s)
-    return encode_varint(length) + s
+    return serialize_varint(length) + s
+
+
+def bytes_to_bool(bytes):
+    return bool(little_endian_to_int(bytes))
 
 
 ###################
@@ -102,10 +108,10 @@ def encode_varstr(s):
 ###################
 
 
-def read_address(stream, timestamp):
+def read_address(stream, has_timestamp):
     r = {}
-    if timestamp:
-        r["time"] = little_endian_to_int(stream.read(4))
+    if has_timestamp:
+        r["timestamp"] = little_endian_to_int(stream.read(4))
     r["services"] = little_endian_to_int(stream.read(8))
     r["ip"] = bytes_to_ip(stream.read(16))
     r["port"] = big_endian_to_int(stream.read(2))
@@ -117,12 +123,12 @@ def read_version_payload(stream):
     r["version"] = little_endian_to_int(stream.read(4))
     r["services"] = little_endian_to_int(stream.read(8))
     r["timestamp"] = little_endian_to_int(stream.read(8))
-    r["receiver_address"] = read_address(stream, timestamp=False)
-    r["sender_address"] = read_address(stream, timestamp=False)
+    r["receiver_address"] = read_address(stream, has_timestamp=False)
+    r["sender_address"] = read_address(stream, has_timestamp=False)
     r["nonce"] = little_endian_to_int(stream.read(8))
     r["user_agent"] = stream.read(read_varint(stream))
     r["start_height"] = little_endian_to_int(stream.read(4))
-    r["relay"] = little_endian_to_int(stream.read(1))
+    r["relay"] = bytes_to_bool(stream.read(1))
     return r
 
 
@@ -133,7 +139,8 @@ def read_empty_payload(stream):
 def read_addr_payload(stream):
     r = {}
     count = read_varint(stream)
-    r["addresses"] = [read_address(stream) for _ in range(count)]
+    r["addresses"] = [read_address(stream, has_timestamp=False) 
+                      for _ in range(count)]
     return r
 
 
@@ -148,7 +155,6 @@ def read_payload(command, stream):
 
 
 def read_message(stream):
-    """ payload attributes at top level """
     msg = {}
     magic = stream.read(4)
     if magic != NETWORK_MAGIC:
@@ -156,11 +162,10 @@ def read_message(stream):
     msg['command'] = stream.read(12).strip(b'\x00')
     payload_length = int.from_bytes(stream.read(4), 'little')
     checksum = stream.read(4)
-    raw_payload = stream.read(payload_length)
-    calculated_checksum = double_sha256(raw_payload)[:4]
+    msg['payload'] = stream.read(payload_length)
+    calculated_checksum = double_sha256(msg['payload'])[:4]
     if calculated_checksum != checksum:
         raise Exception('Checksum does not match')
-    msg['payload'] = read_payload(msg['command'], BytesIO(raw_payload))
     return msg
 
 
@@ -191,7 +196,7 @@ def serialize_version_payload(
     result += ip_to_bytes(sender_ip)
     result += int_to_little_endian(sender_port, 2)
     result += int_to_little_endian(nonce, 8)
-    result += encode_varint(len(user_agent))
+    result += serialize_varint(len(user_agent))
     result += user_agent
     result += int_to_little_endian(start_height, 4)
     result += int_to_little_endian(int(relay), 1)
@@ -255,58 +260,3 @@ def handshake(address):
     return sock
 
 
-def simple_crawler():
-    addresses = [
-        ("35.198.151.21", 8333),
-        ("91.221.70.137", 8333),
-        ("92.255.176.109", 8333),
-        ("94.199.178.17", 8333),
-    ]
-    while addresses:
-        start = time.time()
-        address = addresses.pop()
-        print('Connecting to ', address)
-
-        # If we can't connect, proceed to next address
-        try:
-            sock = handshake(address)
-        except Exception as e:
-            print(f"Encountered error: {e}")
-            raise
-            continue
-
-        # Save the address & version payload
-        # TODO
-        # observe_node(address, version_payload)
-
-        stream = sock.makefile("rb")
-
-        # Request their peer list
-        sock.send(serialize_msg(command=b"getaddr"))
-
-        print("Waiting for addr message")
-        while True:
-            # Only wait 5 seconds for addr message
-            if time.time() - start > 5:
-                break
-
-            # If connection breaks, proceed to next address
-            try:
-                msg = read_message(stream)
-            except:
-                break
-
-            # Only handle "addr" messages
-            if msg["command"] == b"addr":
-                if len(msg["addresses"]) > 1:
-                    addresses.extend([(a["ip"], a["port"])
-                                      for a in msg["addresses"]])
-                    print(f'Received {len(msg["addresses"])} addrs')
-                    break
-            else:
-                print("ignoring ", msg["command"])
-    print("Ran out of addresses. Exiting.")
-
-
-if __name__ == '__main__':
-    simple_crawler()
