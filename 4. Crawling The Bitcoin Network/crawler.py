@@ -3,6 +3,7 @@ import time
 import hashlib
 import socks
 import logging
+import random
 
 from io import BytesIO
 from random import randint
@@ -10,7 +11,7 @@ from base64 import b32decode, b32encode
 from queue import Queue
 from threading import Thread
 
-from db import observe_node, create_table
+from db import observe_node, create_table, count_observations
 
 
 logging.basicConfig(level="INFO", filename='crawler.log', 
@@ -215,12 +216,7 @@ def connect(address):
 
 
 def handshake(address):
-    # sock = socket.create_connection(address, timeout=5)
-    sock = socket.create_connection(address)
-    logger.error(f'initial timeout {sock.gettimeout()}')
-
-    sock.connect(address)
-    logger.error(f'post connection timeout {sock.gettimeout()}')
+    sock = socket.create_connection(address, timeout=5)
     stream = sock.makefile("rb")
 
     # Step 1: our version message
@@ -273,11 +269,13 @@ def fetch_addresses():
     return result
 
 
-def worker(worker_id, address_queue):
-    logger.info("Starting worker #{worker_id}")
-    while True:
-        start = time.time()
+def worker(worker_id, address_queue, run_for):
+    time.sleep(random.random()*5)  # space them out a bit
+    logger.info(f"Starting worker #{worker_id}")
+    outer_start = time.time()
+    while time.time() - outer_start < run_for:  # FIXME: Can't run indefinitely for now
 
+        logger.info(f'Q contains {address_queue.qsize()}')
         address = address_queue.get()
         logger.info(f'Connecting to {address}')
 
@@ -298,9 +296,11 @@ def worker(worker_id, address_queue):
         sock.send(serialize_msg(b"getaddr", b""))
         logger.info('Sent "getaddr". Awaiting "addr" response.')
 
+        # Only wait `TIMEOUT` seconds for addr message
+        start = time.time()
         while True:
-            # Only wait 5 seconds for addr message
-            if time.time() - start > 5:
+            if time.time() - start > 1:  # FIXME: very strict deadline for now ...
+                logger.info('Never received "getaddr"')
                 break
 
             # If connection breaks, proceed to next address
@@ -313,17 +313,19 @@ def worker(worker_id, address_queue):
             # Only handle "addr" messages
             if msg["command"] == b"addr":
                 addr_payload = read_addr_payload(BytesIO(msg["payload"]))
-                for address in addr_payload["addresses"]:
-                    address_queue.put((address["ip"], address["port"]))
-                    logger.info(f'Received {len(addr_payload["addresses"])} addrs from {address["ip"]}')
-                break
+                if len(addr_payload["addresses"]) > 1:
+                    for address in addr_payload["addresses"]:
+                        address_queue.put((address["ip"], address["port"]))
+                    logger.info(f'Received {len(addr_payload["addresses"])} addrs from {address["ip"]} after {time.time() - start} seconds')
+                    break
             else:
                 logger.info(f"Ignoring {msg['command']}")
+
 
     logger.info("Exiting")
 
 
-def threaded_crawler(addresses, workers=5):
+def threaded_crawler(addresses, workers, run_for):
     address_queue = Queue()
 
     for address in addresses:
@@ -332,16 +334,26 @@ def threaded_crawler(addresses, workers=5):
     threads = []
 
     for worker_id in range(workers):
-        thread = Thread(target=worker, args=(worker_id, address_queue))
+        thread = Thread(target=worker, args=(worker_id, address_queue, run_for))
         thread.start()
         threads.append(thread)
 
     for thread in threads:
         thread.join()
+        print(f'thread {threads.index(thread)} finished')
+
+    print("All threads have finished")
 
 
 if __name__ == '__main__':
     create_table()
     addresses = fetch_addresses()
-    import random; random.shuffle(addresses)
-    threaded_crawler(addresses)
+    random.shuffle(addresses)
+    print(f'DNS lookups returned {len(addresses)} addresses')
+    run_for = 60*5
+    workers = 500
+    threaded_crawler(addresses, workers, run_for)
+    oc = count_observations()
+    observations_per_worker_per_second = (oc / workers) / run_for
+    print('Total unique observations: ', oc)
+    print('Observatiosn / worker / second: ', observations_per_worker_per_second)

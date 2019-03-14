@@ -5,11 +5,16 @@ import sqlite3
 import threading
 import time
 
-def execute_statement(statement, args={}):
-    with contextlib.closing(sqlite3.connect("crawler.db")) as conn: # auto-closes
-        with conn: # auto-commits
-            with contextlib.closing(conn.cursor()) as cursor: # auto-closes
-                return cursor.execute(statement, args).fetchall()
+def execute_statement(statement, args={}, retries=3):
+    if retries <= 0:
+        return
+    try:
+        with contextlib.closing(sqlite3.connect("crawler.db")) as conn: # auto-closes
+            with conn: # auto-commits
+                with contextlib.closing(conn.cursor()) as cursor: # auto-closes
+                    return cursor.execute(statement, args).fetchall()
+    except:
+        execute_statement(statement, args, retries=retries-1)
 
 def create_table(remove=False):
     filename = "crawler.db"
@@ -87,4 +92,3 @@ def count_observations(filename="crawler.db"):
 def list_observations():
     with sqlite3.connect("crawler.db") as conn:
         return conn.execute("select * from observations").fetchone()
-    
