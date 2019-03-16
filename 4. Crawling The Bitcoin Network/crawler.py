@@ -335,7 +335,7 @@ def worker(worker_id, address_queue, run_for):
                         if tup not in visited_addresses:  # make queue more honest ...
                             # FIXME hack to get a sense of onion frequency ...
                             if 'onion' in address['ip']:
-                                observe_error(address, 'ONION')
+                                observe_error(tup, 'ONION')
                                 return
                             address_queue.put(tup)
                     logger.info(f'Received {len(addr_payload["addresses"])} addrs from {address["ip"]} after {time.time() - start} seconds')
@@ -363,8 +363,6 @@ def simple_worker(worker_id, address_queue, run_for):
         try:
             sock, version_payload = handshake(address)
         except Exception as e:
-            if str(e) != '[Errno 111] Connection refused':
-                print(str(e))
             continue
 
         # Save the address & version payload
@@ -408,7 +406,8 @@ def crawl():
 def recycle():
     import sqlite3
     conn = sqlite3.connect('backup.db')
-    addresses = conn.execute("select ip, port from errors where error = '[Errno 111] Connection refused';").fetchall()
+    # addresses = conn.execute("select ip, port from errors where error = '[Errno 111] Connection refused';").fetchall()
+    addresses = conn.execute("select ip, port from errors;").fetchall()
     conn.close()
 
     random.shuffle(addresses)

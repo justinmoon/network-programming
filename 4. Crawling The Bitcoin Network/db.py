@@ -5,6 +5,17 @@ import sqlite3
 import threading
 import time
 
+
+conn = sqlite3.connect('crawler.db')
+
+try:
+    RUN = conn.execute('select max(run) from observations;').fetchone()[0] + 1
+except Exception as e:
+    print('error initializing "RUN":', e)
+    RUN = 0
+
+print(f'RUN is {RUN}')
+
 def execute_statement(statement, args={}, retries=3):
     # try / except is a hack for write conflicts from multiple threads
     try:
@@ -20,15 +31,9 @@ def execute_statement(statement, args={}, retries=3):
 
 def create_tables(remove=False):
     filename = "crawler.db"
-    
-    try:
-        os.remove(filename)
-    except Exception as e:
-        print(e)
-        pass
-
     create_observations_table = """
     CREATE TABLE observations (
+        run INT,
         ip TEXT,
         port INT,
         services INT,
@@ -49,6 +54,7 @@ def create_tables(remove=False):
 
     create_errors_table = """
     CREATE TABLE errors (
+        run INT,
         ip TEXT,
         port INT,
         error INT,
@@ -61,6 +67,7 @@ def create_tables(remove=False):
 def observe_node(address, args_dict):
     q = """
     INSERT INTO observations (
+        run,
         ip,
         port,
         services,
@@ -76,6 +83,7 @@ def observe_node(address, args_dict):
         latest_block,
         relay
     ) VALUES (
+        :run,
         :ip,
         :port,
         :services,
@@ -95,21 +103,22 @@ def observe_node(address, args_dict):
     args_dict["nonce"] = str(args_dict["nonce"]) # HACK
     args_dict["ip"] = address[0]
     args_dict["port"] = address[1]
+    args_dict["run"] = RUN
     execute_statement(q, args_dict)
 
 
 def observe_error(address, error):
     q = """
     INSERT INTO errors (
-        ip, port, error, timestamp
+        run, ip, port, error, timestamp
     ) VALUES (
-        ?,?,?,?
+        ?,?,?,?,?
     )
     """
     ip, port = address
     timestamp = time.time()
     try:
-        execute_statement(q, (ip, port, error, timestamp))
+        execute_statement(q, (RUN, ip, port, error, timestamp))
     except Exception as e:
         print(e)
 
