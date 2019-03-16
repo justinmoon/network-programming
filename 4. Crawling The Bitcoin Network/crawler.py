@@ -187,39 +187,22 @@ def serialize_msg(command, payload):
     return result
 
 
-def make_socket(address):
-    if "onion" not in address[0]:
-        r = socket.getaddrinfo(address[0], address[1], 0, 0, socket.SOL_TCP)
-        sock = socket.socket(r[0][0], r[0][1], r[0][2])
-    else:
-        logger.info("Connecting over tor")
-        proxy = ("127.0.0.1", 9050)
-        timeout = 10
-        socks.setdefaultproxy(socks.PROXY_TYPE_SOCKS5, proxy[0], proxy[1])
-        sock = socks.socksocket()
-        sock.settimeout(timeout)
-    return sock
-
-
 def connect(address):
-    if "onion" not in address[0]:
-        ai = socket.getaddrinfo(address[0], address[1], 0, 0, socket.SOL_TCP)
-        tcp_listing = ai[0]
-        socket_info, connect_info = tcp_listing[:-2], tcp_listing[-1]
-        sock = socket.socket(*socket_info)
-        sock.connect(connect_info)
+    if 'onion' in address[0]:
+        sock = socks.create_connection(
+            address,
+            timeout=20,
+            proxy_type=socks.PROXY_TYPE_SOCKS5,
+            proxy_addr="127.0.0.1",
+            proxy_port=9050
+        )
     else:
-        proxy = ("127.0.0.1", 9050)
-        timeout = 10
-        socks.setdefaultproxy(socks.PROXY_TYPE_SOCKS5, proxy[0], proxy[1])
-        sock = socks.socksocket()
-        sock.settimeout(timeout)
-        sock.connect(address)
+        sock = socket.create_connection(address, timeout=20)
     return sock
 
 
 def handshake(address):
-    sock = socket.create_connection(address, timeout=20)
+    sock = connect(address)
     stream = sock.makefile("rb")
 
     # Step 1: our version message
@@ -333,10 +316,6 @@ def worker(worker_id, address_queue, run_for):
                     for address in addr_payload["addresses"]:
                         tup = (address["ip"], address["port"])
                         if tup not in visited_addresses:  # make queue more honest ...
-                            # FIXME hack to get a sense of onion frequency ...
-                            if 'onion' in address['ip']:
-                                observe_error(tup, 'ONION')
-                                return
                             address_queue.put(tup)
                     logger.info(f'Received {len(addr_payload["addresses"])} addrs from {address["ip"]} after {time.time() - start} seconds')
                     break
@@ -418,7 +397,18 @@ def recycle():
     threaded(simple_worker, addresses, workers, run_for)
 
 
+def recycle_tor():
+    import sqlite3
+    conn = sqlite3.connect('backup.db')
+    addresses = conn.execute("""select ip, port from errors where ip like "%onion%";""").fetchall()
+    conn.close()
 
+    random.shuffle(addresses)
+    print(f'Sifting through {len(addresses)} Tor addresses for gold!')
+
+    run_for = 60*60*8
+    workers = 5
+    threaded(simple_worker, addresses, workers, run_for)
 
 if __name__ == '__main__':
     import sys
