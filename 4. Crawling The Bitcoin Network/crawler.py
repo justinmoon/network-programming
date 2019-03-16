@@ -9,15 +9,18 @@ from io import BytesIO
 from random import randint
 from base64 import b32decode, b32encode
 from queue import Queue
-from threading import Thread
+from threading import Thread, Lock
 
-from db import observe_node, create_table, count_observations
+from db import observe_node, observe_error, create_tables, count_observations
 
 
 logging.basicConfig(level="INFO", filename='crawler.log', 
         format='%(threadName)-6s %(asctime)s %(message)s')
 logger = logging.getLogger(__name__)
 NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
+
+visited_addresses_lock = Lock()
+visited_addresses = set()
 
 # docs say it should be this but p2p network seems end b"\x00" x2
 # IPV4_PREFIX = b"\x00" * 10 + b"\xff" * 2
@@ -216,7 +219,7 @@ def connect(address):
 
 
 def handshake(address):
-    sock = socket.create_connection(address, timeout=5)
+    sock = socket.create_connection(address, timeout=20)
     stream = sock.makefile("rb")
 
     # Step 1: our version message
@@ -269,6 +272,15 @@ def fetch_addresses():
     return result
 
 
+def next_address(q, visited_addresses):
+    while True:
+        address = q.get()
+        if address not in visited_addresses:
+            with visited_addresses_lock:
+                visited_addresses.add(address)
+            return address
+
+
 def worker(worker_id, address_queue, run_for):
     time.sleep(random.random()*5)  # space them out a bit
     logger.info(f"Starting worker #{worker_id}")
@@ -276,15 +288,14 @@ def worker(worker_id, address_queue, run_for):
     while time.time() - outer_start < run_for:  # FIXME: Can't run indefinitely for now
 
         logger.info(f'Q contains {address_queue.qsize()}')
-        address = address_queue.get()
+        address = next_address(address_queue, visited_addresses)
         logger.info(f'Connecting to {address}')
 
         # If we can't connect, proceed to next addressf
         try:
             sock, version_payload = handshake(address)
         except Exception as e:
-            # FIXME
-            logger.info(f"Encountered error: {e}")
+            observe_error(address, str(e))
             continue
 
         stream = sock.makefile("rb")
@@ -293,29 +304,40 @@ def worker(worker_id, address_queue, run_for):
         observe_node(address, version_payload)
 
         # Request their peer list
-        sock.send(serialize_msg(b"getaddr", b""))
+        # FIXME hacky excetion handling
+        try:
+            sock.send(serialize_msg(b"getaddr", b""))
+        except Exception as e:
+            observe_error(address, str(e))
+            break
         logger.info('Sent "getaddr". Awaiting "addr" response.')
 
         # Only wait `TIMEOUT` seconds for addr message
         start = time.time()
         while True:
-            if time.time() - start > 1:  # FIXME: very strict deadline for now ...
+            if time.time() - start > 30:
                 logger.info('Never received "getaddr"')
                 break
 
             # If connection breaks, proceed to next address
             try:
                 msg = read_msg(stream)
-            except:
-                logger.info("Error reading message")
+            except Exception as e:
+                observe_error(address, str(e))
                 break
 
             # Only handle "addr" messages
             if msg["command"] == b"addr":
                 addr_payload = read_addr_payload(BytesIO(msg["payload"]))
-                if len(addr_payload["addresses"]) > 1:
+                if len(addr_payload["addresses"]) > 60:
                     for address in addr_payload["addresses"]:
-                        address_queue.put((address["ip"], address["port"]))
+                        tup = (address["ip"], address["port"])
+                        if tup not in visited_addresses:  # make queue more honest ...
+                            # FIXME hack to get a sense of onion frequency ...
+                            if 'onion' in address['ip']:
+                                observe_error(address, 'ONION')
+                                return
+                            address_queue.put(tup)
                     logger.info(f'Received {len(addr_payload["addresses"])} addrs from {address["ip"]} after {time.time() - start} seconds')
                     break
             else:
@@ -325,7 +347,32 @@ def worker(worker_id, address_queue, run_for):
     logger.info("Exiting")
 
 
-def threaded_crawler(addresses, workers, run_for):
+def simple_worker(worker_id, address_queue, run_for):
+    time.sleep(random.random()*5)  # space them out a bit
+    logger.info(f"Starting worker #{worker_id}")
+    outer_start = time.time()
+    while time.time() - outer_start < run_for:  # FIXME: Can't run indefinitely for now
+        if address_queue.qsize() == 0:
+            return
+
+        logger.info(f'Q contains {address_queue.qsize()}')
+        address = next_address(address_queue, visited_addresses)
+        logger.info(f'Connecting to {address}')
+
+        # If we can't connect, proceed to next addressf
+        try:
+            sock, version_payload = handshake(address)
+        except Exception as e:
+            if str(e) != '[Errno 111] Connection refused':
+                print(str(e))
+            continue
+
+        # Save the address & version payload
+        print(f'Contacted {address[0]}')
+        logger.info(f'Contacted {address[0]}')
+
+
+def threaded(target, addresses, workers, run_for):
     address_queue = Queue()
 
     for address in addresses:
@@ -334,26 +381,47 @@ def threaded_crawler(addresses, workers, run_for):
     threads = []
 
     for worker_id in range(workers):
-        thread = Thread(target=worker, args=(worker_id, address_queue, run_for))
+        thread = Thread(target=target, args=(worker_id, address_queue, run_for))
         thread.start()
         threads.append(thread)
 
     for thread in threads:
         thread.join()
-        print(f'thread {threads.index(thread)} finished')
 
     print("All threads have finished")
 
 
-if __name__ == '__main__':
-    create_table()
+def crawl():
+    create_tables()
     addresses = fetch_addresses()
     random.shuffle(addresses)
     print(f'DNS lookups returned {len(addresses)} addresses')
-    run_for = 60*5
+    run_for = 60*60*8
     workers = 500
-    threaded_crawler(addresses, workers, run_for)
+    threaded(worker, addresses, workers, run_for)
     oc = count_observations()
     observations_per_worker_per_second = (oc / workers) / run_for
     print('Total unique observations: ', oc)
+    print('Observations / second: ', oc / run_for)
     print('Observatiosn / worker / second: ', observations_per_worker_per_second)
+
+def recycle():
+    import sqlite3
+    conn = sqlite3.connect('backup.db')
+    addresses = conn.execute("select ip, port from errors where error = '[Errno 111] Connection refused';").fetchall()
+    conn.close()
+
+    random.shuffle(addresses)
+    print(f'Sifting through {len(addresses)} addresses for gold!')
+
+    run_for = 60*60*8
+    workers = 500
+    threaded(simple_worker, addresses, workers, run_for)
+
+
+
+
+if __name__ == '__main__':
+    import sys
+    command = sys.argv[1]
+    eval(f'{command}()')
