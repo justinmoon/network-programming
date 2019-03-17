@@ -1,8 +1,5 @@
 import contextlib
-import os
-import random
 import sqlite3
-import threading
 import time
 
 
@@ -16,23 +13,25 @@ except Exception as e:
 
 print(f'RUN is {RUN}')
 
+
 def execute_statement(statement, args={}, retries=3):
     # try / except is a hack for write conflicts from multiple threads
     try:
-        with contextlib.closing(sqlite3.connect("crawler.db")) as conn: # auto-closes
-            with conn: # auto-commits
-                with contextlib.closing(conn.cursor()) as cursor: # auto-closes
+        with contextlib.closing(sqlite3.connect("crawler.db")) as conn:  # auto-closes
+            with conn:  # auto-commits
+                with contextlib.closing(conn.cursor()) as cursor:  # auto-closes
                     return cursor.execute(statement, args).fetchall()
-    except Exception as e:
+    except:
+        # Retry a couple times before blowing up ...
         if retries <= 0:
-            print(e)
+            raise
         else:
             return execute_statement(statement, args, retries=retries-1)
 
 def create_tables(remove=False):
     filename = "crawler.db"
     create_observations_table = """
-    CREATE TABLE observations (
+    CREATE TABLE IF NOT EXISTS observations (
         run INT,
         ip TEXT,
         port INT,
@@ -53,7 +52,7 @@ def create_tables(remove=False):
     execute_statement(create_observations_table)
 
     create_errors_table = """
-    CREATE TABLE errors (
+    CREATE TABLE IF NOT EXISTS errors (
         run INT,
         ip TEXT,
         port INT,
@@ -117,17 +116,9 @@ def observe_error(address, error):
     """
     ip, port = address
     timestamp = time.time()
-    try:
-        execute_statement(q, (RUN, ip, port, error, timestamp))
-    except Exception as e:
-        print(e)
+    execute_statement(q, (RUN, ip, port, error, timestamp))
 
 
 def count_observations(filename="crawler.db"):
     with sqlite3.connect("crawler.db") as conn:
-        return conn.execute("select count(*) from observations").fetchone()[0]
-    
-def list_observations():
-    with sqlite3.connect("crawler.db") as conn:
-        return conn.execute("select * from observations").fetchone()
-
+        return conn.execute("select count(distinct ip) from observations").fetchone()[0]
