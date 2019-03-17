@@ -11,7 +11,7 @@ from base64 import b32decode, b32encode
 from queue import Queue
 from threading import Thread, Lock
 
-from db import observe_node, observe_error, create_tables, count_observations
+from db import observe_node, observe_error, create_tables
 
 
 logging.basicConfig(level="INFO", filename='crawler.log', 

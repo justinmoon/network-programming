@@ -119,6 +119,28 @@ def observe_error(address, error):
     execute_statement(q, (RUN, ip, port, error, timestamp))
 
 
-def count_observations(filename="crawler.db"):
+def total_observations():
     with sqlite3.connect("crawler.db") as conn:
         return conn.execute("select count(distinct ip) from observations").fetchone()[0]
+
+def last_run_observations():
+    with sqlite3.connect("crawler.db") as conn:
+        q = """
+        select count(distinct ip) 
+        from observations
+        where run = (select max(run) from observations);
+        """
+        return conn.execute(q).fetchone()[0]
+
+def new_observations():
+    with sqlite3.connect("crawler.db") as conn:
+        # Hacky ...
+        q = """
+        select count(distinct ip) 
+        from observations
+        where run = (select max(run) from observations)
+        and ip not in ( 
+            select ip from observations where run < (select max(run) from observations)
+        )
+        """
+        return conn.execute(q).fetchone()[0]

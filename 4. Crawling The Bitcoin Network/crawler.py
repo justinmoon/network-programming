@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 import random
@@ -11,6 +12,7 @@ from lib import (
     read_addr_payload, connect, fetch_addresses
 )
 from db import observe_node, observe_error, create_tables
+from report import report
 
 
 logging.basicConfig(level="INFO", filename='crawler.log',
@@ -132,7 +134,10 @@ class Crawler:
     def crawl(self):
         while True:
             address = self.get_address()
-            print(f'connecting to {address}')
+
+            if not address:  # FIXME better way to exit threads
+                return
+
             try:
                 connection = Connection(address)
                 connection.open()
@@ -157,7 +162,7 @@ def main():
         address_queue.put(address)
 
     # Run it
-    num_threads = 5
+    num_threads = 100
     threads = []
 
     def target(address_queue):
@@ -168,8 +173,17 @@ def main():
         thread.start()
         threads.append(thread)
 
-    for thread in threads:
-        thread.join()
+    # Generate a little report until the script finishes
+    while True:
+
+        # Break out of loop if all threads are dead
+        if True not in set([t.is_alive() for t in threads]):
+            break
+
+        # Clear terminal window and print fresh report
+        os.system('cls' if os.name == 'nt' else 'clear')
+        report(threads, address_queue)
+        time.sleep(1)
 
     print("All threads have finished")
 
