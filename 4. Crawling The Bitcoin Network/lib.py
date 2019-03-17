@@ -216,6 +216,7 @@ def fetch_ips(dns_seed):
 
 
 def fetch_addresses():
+    # FIXME: this needs a better name. just confused it with db queries ...
     result = []
     for dns_seed in DNS_SEEDS:
         try:

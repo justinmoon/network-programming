@@ -119,6 +119,11 @@ def observe_error(address, error):
     execute_statement(q, (RUN, ip, port, error, timestamp))
 
 
+def fetch_visited_addrs():
+    with sqlite3.connect("crawler.db") as conn:
+        return conn.execute("select distinct ip, port from observations").fetchall()
+
+
 def total_observations():
     with sqlite3.connect("crawler.db") as conn:
         return conn.execute("select count(distinct ip) from observations").fetchone()[0]

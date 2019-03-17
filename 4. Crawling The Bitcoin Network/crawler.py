@@ -11,16 +11,13 @@ from lib import (
     serialize_version_payload, serialize_msg, read_version_payload, read_msg,
     read_addr_payload, connect, fetch_addresses
 )
-from db import observe_node, observe_error, create_tables
+from db import observe_node, observe_error, create_tables, fetch_visited_addrs
 from report import report
 
 
 logging.basicConfig(level="INFO", filename='crawler.log',
     format='%(threadName)-6s %(asctime)s %(message)s')
 logger = logging.getLogger(__name__)
-
-visited_addresses_lock = Lock()
-visited_addresses = set()
 
 
 class Connection:
@@ -113,6 +110,7 @@ class Crawler:
         self.visited = set()
         self.lock = Lock()
 
+
     def observe_node(self, connection):
         observe_node(connection.address, connection.version_payload)
 
@@ -142,6 +140,7 @@ class Crawler:
                 connection = Connection(address)
                 connection.open()
             except Exception as e:
+                logging.info(str(e))
                 observe_error(address, str(e))
                 continue
 
@@ -150,26 +149,17 @@ class Crawler:
             self.put_addresses(connection.addresses)
 
 
-def main():
-    create_tables()
-
-    # Get addresses, shuffle them, create and fill the queue
-    addresses = fetch_addresses()
-    logger.info(f'DNS lookups returned {len(addresses)} addresses')
-    random.shuffle(addresses)
-    address_queue = Queue()
-    for address in addresses:
-        address_queue.put(address)
+def threaded_crawler(address_queue):
 
     # Run it
-    num_threads = 100
+    num_threads = 2000
     threads = []
 
-    def target(address_queue):
+    def target():
         return Crawler(address_queue).crawl()
 
     for _ in range(num_threads):
-        thread = Thread(target=target, args=(address_queue,))
+        thread = Thread(target=target)
         thread.start()
         threads.append(thread)
 
@@ -183,13 +173,31 @@ def main():
         # Clear terminal window and print fresh report
         os.system('cls' if os.name == 'nt' else 'clear')
         report(threads, address_queue)
-        time.sleep(1)
+        time.sleep(2)
 
     print("All threads have finished")
 
 
+def synchronous_crawler(address_queue, visited):
+    return Crawler(address_queue, visited).crawl()
+
+
+def main():
+    # Make sure database is set up
+    create_tables()
+
+    # Get addresses, shuffle them, create and fill the queue
+    addresses = fetch_addresses()
+    logger.info(f'DNS lookups returned {len(addresses)} addresses')
+    random.shuffle(addresses)
+    address_queue = Queue()
+    for address in addresses:
+        address_queue.put(address)
+
+    # Run it
+    # synchronous_crawler(address_queue)
+    threaded_crawler(address_queue)
+
+
 if __name__ == '__main__':
-    # import sys
-    # command = sys.argv[1]
-    # eval(f'{command}()')
     main()
