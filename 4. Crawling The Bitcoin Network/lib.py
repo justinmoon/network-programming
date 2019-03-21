@@ -122,12 +122,12 @@ def read_version_payload(stream):
 
 
 def serialize_version_payload(
-        version=70015, services=0, timestamp=None,
-        receiver_services=0,
+        version=70015, services=1, timestamp=None,
+        receiver_services=1,
         receiver_ip='0.0.0.0', receiver_port=8333,
-        sender_services=0,
+        sender_services=1,
         sender_ip='0.0.0.0', sender_port=8333,
-        nonce=None, user_agent=b'/advancing-bitcoin/',
+        nonce=None, user_agent=b'/buidl-bootcamp/',
         latest_block=0, relay=True):
     if timestamp is None:
         timestamp = int(time.time())
@@ -184,7 +184,7 @@ def read_msg(stream):
     }
 
 
-def serialize_msg(command, payload):
+def serialize_msg(command, payload=b''):
     result = NETWORK_MAGIC
     result += command + b'\x00' * (12 - len(command))
     result += int_to_little_endian(len(payload), 4)
@@ -207,23 +207,36 @@ def connect(address):
     return sock
 
 
-def fetch_ips(dns_seed):
-    ip_list = []
-    ais = socket.getaddrinfo(dns_seed, 0, 0, 0, 0)
-    for result in ais:
-        ip_list.append(result[-1][0])
-    return list(set(ip_list))
+def handshake(address):
+    sock = socket.create_connection(address, 20)
+    stream = sock.makefile("rb")
+
+    # Step 1: our version message
+    payload = serialize_version_payload()
+    msg = serialize_msg(command=b"version", payload=payload)
+    sock.sendall(msg)
+
+    # Step 2: their version message
+    msg = read_msg(stream)
+
+    # Step 3: their verack message
+    msg = read_msg(stream)
+
+    # Step 4: our verack
+    msg = serialize_msg(command=b"verack")
+    sock.sendall(msg)
+
+    return sock
 
 
 def fetch_addresses():
-    # FIXME: this needs a better name. just confused it with db queries ...
-    result = []
+    addresses = []
     for dns_seed in DNS_SEEDS:
         try:
-            ips = fetch_ips(dns_seed)
-            addresses = [(ip, 8333) for ip in ips]
-            result.extend(addresses)
+            addr_info = socket.getaddrinfo(dns_seed, 0, 0, 0, 0)
+            new_addresses = [(ai[-1][0], 8333) for ai in addr_info]
+            addresses.extend(list(set(new_addresses)))
         except:
-            logger.info(f"Error fetching addresses from {dns_seed}")
+            logger.info(f"error fetching addresses from {dns_seed}")
             continue
-    return result
+    return addresses
