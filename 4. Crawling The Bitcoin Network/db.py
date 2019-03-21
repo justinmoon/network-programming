@@ -2,8 +2,10 @@ import contextlib
 import sqlite3
 import time
 
+db_file = 'crawler.db'
 
-conn = sqlite3.connect('crawler.db')
+
+conn = sqlite3.connect(db_file)
 
 try:
     RUN = conn.execute('select max(run) from observations;').fetchone()[0] + 1
@@ -16,20 +18,10 @@ print(f'RUN is {RUN}')
 
 def execute_statement(statement, args={}, retries=3):
     # try / except is a hack for write conflicts from multiple threads
-    try:
-        with contextlib.closing(sqlite3.connect("crawler.db")) as conn:  # auto-closes
-            with conn:  # auto-commits
-                with contextlib.closing(conn.cursor()) as cursor:  # auto-closes
-                    return cursor.execute(statement, args).fetchall()
-    except:
-        # Retry a couple times before blowing up ...
-        if retries <= 0:
-            raise
-        else:
-            return execute_statement(statement, args, retries=retries-1)
+    with sqlite3.connect('crawler.db') as conn:
+        return conn.execute(statement, args).fetchall()
 
 def create_tables(remove=False):
-    filename = "crawler.db"
     create_observations_table = """
     CREATE TABLE IF NOT EXISTS observations (
         run INT,
@@ -120,16 +112,16 @@ def observe_error(address, error):
 
 
 def fetch_visited_addrs():
-    with sqlite3.connect("crawler.db") as conn:
+    with sqlite3.connect(db_file) as conn:
         return conn.execute("select distinct ip, port from observations").fetchall()
 
 
 def total_observations():
-    with sqlite3.connect("crawler.db") as conn:
+    with sqlite3.connect(db_file) as conn:
         return conn.execute("select count(distinct ip) from observations").fetchone()[0]
 
 def last_run_observations():
-    with sqlite3.connect("crawler.db") as conn:
+    with sqlite3.connect(db_file) as conn:
         q = """
         select count(distinct ip) 
         from observations
@@ -138,7 +130,7 @@ def last_run_observations():
         return conn.execute(q).fetchone()[0]
 
 def new_observations():
-    with sqlite3.connect("crawler.db") as conn:
+    with sqlite3.connect(db_file) as conn:
         # Hacky ...
         q = """
         select count(distinct ip) 
