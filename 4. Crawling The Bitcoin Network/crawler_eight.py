@@ -186,8 +186,7 @@ class Crawler:
 
     def prime_from_dns_seeds(self):
         addresses = fetch_addresses()
-        for address in addresses:
-            db.insert_node(Node(address[0], address[1]).__dict__)
+        db.insert_nodes([Node(address[0], address[1]).__dict__ for address in addresses])
         logging.info(f'Fetched {len(addresses)} addresses')
         self.prime_from_db()
 
@@ -197,6 +196,10 @@ class Crawler:
 
     def print_report(self):
         print(f'Inputs: {self.worker_inputs.qsize()} | Outputs: {self.worker_outputs.qsize()} | Node Count: {db.count_nodes()}')
+
+    def get_worker_outputs(self):
+        while self.worker_outputs.qsize():
+            yield self.worker_outputs.get()
 
     def main_loop(self):
         while True:
