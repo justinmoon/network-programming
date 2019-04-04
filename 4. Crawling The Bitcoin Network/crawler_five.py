@@ -79,10 +79,6 @@ class Connection:
     def handle_ping(self, payload):
         self.send_pong(payload)
 
-    def handle_pong(self, payload):
-        res = serialize_msg(command=b'pong', payload=payload)
-        self.sock.sendall(res)
-
     def handle_addr(self, payload):
         payload = read_addr_payload(BytesIO(payload))
         if len(payload['addresses']) > 1:

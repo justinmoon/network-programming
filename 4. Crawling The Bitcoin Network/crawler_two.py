@@ -18,7 +18,7 @@ class Connection:
         self.peer_addresses = []
         self.listen = True
 
-    def handle_pong(self, payload):
+    def handle_ping(self, payload):
         res = serialize_msg(command=b'pong', payload=payload)
         self.sock.sendall(res)
 

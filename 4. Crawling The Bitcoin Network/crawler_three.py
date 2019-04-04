@@ -21,7 +21,7 @@ class Connection:
         self.timeout = timeout
         self.start_time = None
 
-    def handle_pong(self, payload):
+    def handle_ping(self, payload):
         res = serialize_msg(command=b'pong', payload=payload)
         self.sock.sendall(res)
 
