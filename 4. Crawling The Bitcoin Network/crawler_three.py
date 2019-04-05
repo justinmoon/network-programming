@@ -1,8 +1,9 @@
 import time
+import socket
 
 from io import BytesIO
 
-from lib import handshake, read_msg, serialize_msg, read_varint, read_address
+from lib import handshake, read_msg, serialize_msg, read_varint, read_address, BitcoinProtocolError, serialize_version_payload, read_version_payload
 
 
 def read_addr_payload(stream):
@@ -12,93 +13,131 @@ def read_addr_payload(stream):
     return r
 
 
+class Node:
+
+    def __init__(self, ip, port):
+        self.ip = ip
+        self.port = port
+
+    @property
+    def address(self):
+        return (self.ip, self.port)
+
+
 class Connection:
 
-    def __init__(self, address, timeout=20):
-        self.address = address
-        self.sock = None
-        self.peer_addresses = []
+    def __init__(self, node, timeout=10):
+        self.node = node
         self.timeout = timeout
-        self.start_time = None
+        self.sock = None
+        self.stream = None
+        self.start = None
 
-    def handle_ping(self, payload):
+        # Results
+        self.peer_version_payload = None
+        self.nodes_discovered = []
+
+    def send_version(self):
+        payload = serialize_version_payload()
+        msg = serialize_msg(command=b"version", payload=payload)
+        self.sock.sendall(msg)
+
+    def send_verack(self):
+        msg = serialize_msg(command=b"verack")
+        self.sock.sendall(msg)
+
+    def send_pong(self, payload):
         res = serialize_msg(command=b'pong', payload=payload)
         self.sock.sendall(res)
+
+    def send_getaddr(self):
+        self.sock.sendall(serialize_msg(b'getaddr'))
+
+    def handle_version(self, payload):
+        # Save their version payload
+        stream = BytesIO(payload)
+        self.peer_version_payload = read_version_payload(stream)
+
+        # Acknowledge
+        self.send_verack()
+
+    def handle_verack(self, payload):
+        # Request peer's peers
+        self.send_getaddr()
+
+    def handle_ping(self, payload):
+        self.send_pong(payload)
 
     def handle_addr(self, payload):
         payload = read_addr_payload(BytesIO(payload))
         if len(payload['addresses']) > 1:
-            # persist addresses and exit connection
-            self.peer_addresses = [
-                (a['ip'], a['port']) for a in payload['addresses']
+            self.nodes_discovered = [
+                Node(a['ip'], a['port']) for a in payload['addresses']
             ]
-            self.listen = False
 
-    def handle_msg(self, msg):
+    def handle_msg(self):
+        msg = read_msg(self.stream)
         command = msg['command'].decode()
-        print(f'Received a "{command}" of {len(msg["payload"])} bytes')
-        method = f'handle_{command}'  # handle_addr, handle_block, etc
-        if hasattr(self, method):
-            getattr(self, method)(msg['payload'])
+        print(f'Received a "{command}"')
+        method_name = f'handle_{command}'
+        if hasattr(self, method_name):
+            getattr(self, method_name)(msg['payload'])
 
     def remain_alive(self):
-        awaiting_addr = len(self.peer_addresses) == 0
-        elapsed = time.time() - self.start_time
-        timed_out = elapsed > self.timeout
-        return awaiting_addr and not timed_out
-        
+        timed_out = time.time() - self.start > self.timeout
+        return not timed_out and not self.nodes_discovered
+
     def open(self):
-        self.start_time = time.time()
+        # Set start time
+        self.start = time.time()
 
-        # TODO: get at the VERSION message
-        self.sock = handshake(self.address)  # FIXME: save the version payload
-        stream = self.sock.makefile('rb')
+        # Open TCP connection
+        print(f'Connecting to {self.node.ip}')
+        self.sock = socket.create_connection(self.node.address, 
+                                             timeout=self.timeout)
+        self.stream = self.sock.makefile('rb')
 
-        # Request peer's peers
-        self.sock.sendall(serialize_msg(b'getaddr'))
+        # Start version handshake
+        self.send_version()
 
+        # Handle messages until program exists
         while self.remain_alive():
-            msg = read_msg(stream)
-            self.handle_msg(msg)
+            self.handle_msg()
 
     def close(self):
+        # Clean up socket's file descriptor
         if self.sock:
             self.sock.close()
-        
+
+
 class Crawler:
 
-    def __init__(self):
-        self.addresses = []
-
-    def prime(self):
-        # TODO: ask DNS seeds for starter addresses
-        self.addresses = [('92.109.124.73', 8333)]
+    def __init__(self, nodes):
+        self.nodes = nodes
 
     def crawl(self):
-        print('Fetching initial addresses')
-        self.prime()
-
-        print('Entering main loop')
         while True:
-            # Get next address from addresses and connect
-            address = self.addresses.pop()
+            # Get next node and connect
+            node = self.nodes.pop()
 
             try:
-                # Establish connection
-                print(f'Connecting to {address}')
-                conn = Connection(address, timeout=1)
+                conn = Connection(node)
                 conn.open()
-                print(f'Received {len(conn.peer_addresses)} addresses from {address}')
-
-            except Exception as e:
+            except (OSError, BitcoinProtocolError) as e:
                 print(f'Got error: {str(e)}')
-                continue
-            
             finally:
                 conn.close()
 
-            self.addresses.extend(conn.peer_addresses)
+            # Handle the results
+            self.nodes.extend(conn.nodes_discovered)
+            print(f'{conn.node.ip} reports version {conn.peer_version_payload}')
 
 
 if __name__ == '__main__':
-    Crawler().crawl()
+    nodes = [
+        Node('92.109.124.73', 8333),
+        Node('67.205.160.50', 8333),     
+        Node('54.169.196.130', 8333),     
+    ]
+
+    Crawler(nodes).crawl()
