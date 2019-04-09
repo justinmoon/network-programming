@@ -3,15 +3,9 @@ import time
 import hashlib
 import socks
 import logging
-import random
 
-from io import BytesIO
 from random import randint
 from base64 import b32decode, b32encode
-from queue import Queue
-from threading import Thread, Lock
-
-from db import observe_node, observe_error, create_tables
 
 
 logging.basicConfig(level="INFO", filename='crawler.log', 
@@ -21,8 +15,8 @@ logger = logging.getLogger(__name__)
 NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
 
 # docs say it should be this but p2p network seems end b"\x00" x2
-# IPV4_PREFIX = b"\x00" * 10 + b"\xff" * 2
-IPV4_PREFIX = b"\x00" * 10 + b"\x00" * 2
+IPV4_PREFIX = b"\x00" * 10 + b"\xff" * 2
+# IPV4_PREFIX = b"\x00" * 10 + b"\x00" * 2
 ONION_PREFIX = b"\xFD\x87\xD8\x7E\xEB\x43"  # ipv6 prefix for .onion address
 DNS_SEEDS = [
     'dnsseed.bitcoin.dashjr.org',
@@ -32,6 +26,10 @@ DNS_SEEDS = [
     'seed.bitcoin.sprovoost.nl',
     'seed.bitnodes.io',
 ]
+
+
+class BitcoinProtocolError(Exception):
+    pass
 
 
 def little_endian_to_int(b):
@@ -55,9 +53,7 @@ def double_sha256(s):
 
 
 def bytes_to_ip(b):
-    if b[:6] == ONION_PREFIX:
-        return b32encode(b[6:]).lower().decode("ascii") + ".onion"
-    elif b[0:12] == IPV4_PREFIX:  # IPv4
+    if b[0:12] == IPV4_PREFIX:  # IPv4
         return socket.inet_ntop(socket.AF_INET, b[12:16])
     else:  # IPv6
         return socket.inet_ntop(socket.AF_INET6, b)
@@ -100,14 +96,14 @@ def encode_varint(i):
     elif i < 0x10000000000000000:
         return b'\xff' + int_to_little_endian(i, 8)
     else:
-        raise RuntimeError('integer too large: {}'.format(i))
+        raise BitcoinProtocolError('integer too large: {}'.format(i))
 
 
 def read_version_payload(stream):
     r = {}
     r["version"] = little_endian_to_int(stream.read(4))
     r["services"] = little_endian_to_int(stream.read(8))
-    r["timestamp"] = little_endian_to_int(stream.read(8))
+    r["sender_timestamp"] = little_endian_to_int(stream.read(8))
     r["receiver_services"] = little_endian_to_int(stream.read(8))
     r["receiver_ip"] = bytes_to_ip(stream.read(16))
     r["receiver_port"] = big_endian_to_int(stream.read(2))
@@ -153,7 +149,7 @@ def serialize_version_payload(
 def read_address(stream):
     r = {}
     r["time"] = little_endian_to_int(stream.read(4))
-    r["services"] = stream.read(8)
+    r["services"] = little_endian_to_int(stream.read(8))
     r["ip"] = bytes_to_ip(stream.read(16))
     r["port"] = big_endian_to_int(stream.read(2))
     return r
@@ -169,7 +165,7 @@ def read_addr_payload(stream):
 def read_msg(stream):
     magic = stream.read(4)
     if magic != NETWORK_MAGIC:
-        raise Exception(f'Magic is wrong: {magic}')
+        raise BitcoinProtocolError(f'Magic is wrong: {magic}')
     command = stream.read(12)
     command = command.strip(b'\x00')
     payload_length = int.from_bytes(stream.read(4), 'little')
@@ -177,7 +173,7 @@ def read_msg(stream):
     payload = stream.read(payload_length)
     calculated_checksum = double_sha256(payload)[:4]
     if calculated_checksum != checksum:
-        raise Exception('Checksum does not match')
+        raise BitcoinProtocolError('Checksum does not match')
     return {
         "command": command,
         "payload": payload,
@@ -192,23 +188,8 @@ def serialize_msg(command, payload=b''):
     result += payload
     return result
 
-
-def connect(address):
-    if 'onion' in address[0]:
-        sock = socks.create_connection(
-            address,
-            timeout=20,
-            proxy_type=socks.PROXY_TYPE_SOCKS5,
-            proxy_addr="127.0.0.1",
-            proxy_port=9050
-        )
-    else:
-        sock = socket.create_connection(address, timeout=20)
-    return sock
-
-
 def handshake(address):
-    sock = socket.create_connection(address, 20)
+    sock = socket.create_connection(address, timeout=20)
     stream = sock.makefile("rb")
 
     # Step 1: our version message
@@ -229,14 +210,15 @@ def handshake(address):
     return sock
 
 
-def fetch_addresses():
+
+def query_dns_seeds():
     addresses = []
     for dns_seed in DNS_SEEDS:
         try:
             addr_info = socket.getaddrinfo(dns_seed, 0, 0, 0, 0)
             new_addresses = [(ai[-1][0], 8333) for ai in addr_info]
             addresses.extend(list(set(new_addresses)))
-        except:
+        except Exception as e:
             logger.info(f"error fetching addresses from {dns_seed}")
             continue
     return addresses
