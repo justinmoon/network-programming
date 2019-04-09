@@ -1,12 +1,9 @@
 import sqlite3
 import time
 
-from crawler import Node
-
 DB_FILE = 'crawler.db'
-ONE_HOUR = 60*60
 
-empty_version_payload = dict.fromkeys(['services', 'sender_timestamp',
+empty_version_payload = dict.fromkeys(['version', 'services', 'sender_timestamp',
     'receiver_services', 'receiver_ip', 'receiver_port', 'sender_services',
     'sender_ip', 'sender_port', 'nonce', 'user_agent', 'latest_block', 'relay'])
 
@@ -15,8 +12,6 @@ CREATE TABLE IF NOT EXISTS nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ip TEXT,
     port INT,
-    next_connection_at INT,
-    connections_missed INT,
     UNIQUE(ip, port)
 )
 """
@@ -24,8 +19,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 create_connections_table_query = """
 CREATE TABLE IF NOT EXISTS connections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    handshake_start INT,
-    handshake_end INT,
+    start INT,
+    version INT,
     services INT,
     sender_timestamp INT,
     receiver_services INT,
@@ -52,6 +47,7 @@ def dict_factory(cursor, row):
 
 
 def node_factory(cursor, row):
+    from mycrawler import Node
     return Node(**dict_factory(cursor, row))
 
 
@@ -80,92 +76,66 @@ def drop_and_create_tables():
 def insert_node(query_args):
     query = """
     INSERT OR IGNORE INTO nodes (
-        ip, port, next_connection_at, connections_missed
+        ip, port
     ) VALUES (
-        :ip, :port, :next_connection_at, :connections_missed
+        :ip, :port
     )
-    """
-    return execute(query, query_args)
-
-
-def update_node(query_args):
-    query = """
-    UPDATE nodes
-    SET 
-        next_connection_at = :next_connection_at,
-        connections_missed = :connections_missed
-    WHERE
-        id = :id
     """
     return execute(query, query_args)
 
 
 def insert_connection(query_args):
     query = """
-    INSERT INTO connections
-        (handshake_start, handshake_end, services, sender_timestamp, receiver_services,
-        receiver_ip, receiver_port, sender_services, sender_ip, sender_port,
+    INSERT INTO connections 
+        (version, start, services, sender_timestamp, receiver_services, 
+        receiver_ip, receiver_port, sender_services, sender_ip, sender_port, 
         nonce, user_agent, latest_block, relay, node_id)
     VALUES
-        (:handshake_start, :handshake_end, :services, :sender_timestamp,
-         :receiver_services, :receiver_ip, :receiver_port, :sender_services, :sender_ip,
+        (:version, :start, :services, :sender_timestamp, 
+         :receiver_services, :receiver_ip, :receiver_port, :sender_services, :sender_ip, 
          :sender_port, :nonce, :user_agent, :latest_block, :relay, :node_id)
     """
+    'version', 'services', 'sender_timestamp', 'receiver_services', 'receiver_ip', 'receiver_port', 'sender_services', 'sender_ip', 'sender_port', 'nonce', 'user_agent', 'latest_block', 'relay', 'start', 'node_id'
     return execute(query, query_args)
 
 
-def nodes_due(num_nodes):
-    # Get every node that is past due for a visit
-    now = time.time()
-    query = '''
-    SELECT * FROM nodes
-    WHERE next_connection_at < ?
-    ORDER BY next_connection_at ASC
-    LIMIT ?
-    '''
-    return execute(
-        query,
-        args=(now, num_nodes),
-        row_factory=node_factory,
-    ).fetchall()
+def process_crawler_outputs(conn):
+    # Insert newly discovered nodes
+    for node in conn.nodes_discovered:
+        insert_node(node.__dict__)
 
-
-def process_crawler_output(conn):
-    start = time.time()
-    # Prepare arguments to update_node()
-    if conn.version_payload:
-        # If they were online, schedule another visit in 1 hour
-        conn.node.next_connection_at = time.time() + ONE_HOUR
-        conn.node.connections_missed = 0
+    # Insert the connection
+    if conn.peer_version_payload:
+        args = conn.peer_version_payload.copy()
+        args['nonce'] = str(args['nonce'])  # HACK
     else:
-        # If they were online, schedule another visit with double the wait as last time
-        conn.node.next_connection_at = time.time() + 2**conn.node.connections_missed * ONE_HOUR
-        conn.node.connections_missed = conn.node.connections_missed + 1
-    args = conn.node.__dict__
-    result = update_node(args)
-    node_id = result.lastrowid
-
-    # Prepare arguments to insert_connection()
-    args = conn.__dict__.copy()
+        args = empty_version_payload
+    args['start'] = conn.start
     args['node_id'] = conn.node.id
-    version_payload = conn.version_payload or empty_version_payload
-    args.update(version_payload)
-    args['nonce'] = str(args['nonce'])  # HACK
     insert_connection(args)
 
-    # Insert all the newly discovered nodes
-    for node in conn.nodes_discovered:
-        # Remember, "INSERT OR IGNORE" will ignore duplicates
-        insert_node(node.__dict__)
-    print(f'processing took {time.time() - start} on {len(conn.nodes_discovered)} nodes discovered')
 
-def count_nodes():
-    query = """
-        select count(distinct node_id) 
-        from connections 
-        where 
-            handshake_end is not null and
-            handshake_end > ?
-    """
-    yesterday = time.time() - 60*60*24
-    return execute(query, (yesterday,)).fetchone()[0]
+def next_nodes(n):
+    return execute(
+        """
+        SELECT *
+        FROM nodes
+        WHERE id NOT IN (SELECT node_id FROM connections)
+        ORDER BY id DESC
+        LIMIT ?""",
+        (n,),
+        row_factory=node_factory).fetchall()
+
+
+def nodes_visited():
+    return execute(
+        """SELECT COUNT(DISTINCT node_id)
+        FROM connections
+        WHERE services IS NOT null"""
+    ).fetchone()[0]
+
+
+def nodes_total():
+    return execute(
+        "SELECT COUNT(*) FROM nodes"
+    ).fetchone()[0]
