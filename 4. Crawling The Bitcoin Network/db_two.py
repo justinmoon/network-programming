@@ -95,7 +95,6 @@ def insert_connection(query_args):
          :receiver_services, :receiver_ip, :receiver_port, :sender_services, :sender_ip, 
          :sender_port, :nonce, :user_agent, :latest_block, :relay, :node_id)
     """
-    'version', 'services', 'sender_timestamp', 'receiver_services', 'receiver_ip', 'receiver_port', 'sender_services', 'sender_ip', 'sender_port', 'nonce', 'user_agent', 'latest_block', 'relay', 'start', 'node_id'
     return execute(query, query_args)
 
 

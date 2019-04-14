@@ -1,203 +1,266 @@
-import os
 import time
+import socket
+import threading
+import queue
 import logging
-import random
 
 from io import BytesIO
-from queue import Queue
-from threading import Thread, Lock
 
-from lib import (
-    serialize_version_payload, serialize_msg, read_version_payload, read_msg,
-    read_addr_payload, connect, fetch_addresses
-)
-from db import observe_node, observe_error, create_tables, fetch_visited_addrs
-from report import report
+import socks
+
+from lib import handshake, read_msg, serialize_msg, read_varint, read_address, BitcoinProtocolError, serialize_version_payload, read_version_payload
+
+import db as db
 
 
-logging.basicConfig(level="INFO", filename='crawler.log',
-    format='%(threadName)-6s %(asctime)s %(message)s')
+logging.basicConfig(level='INFO', filename='crawler.log')
 logger = logging.getLogger(__name__)
+
+
+def read_addr_payload(stream):
+    r = {}
+    count = read_varint(stream)
+    r['addresses'] = [read_address(stream) for _ in range(count)]
+    return r
+
+
+DNS_SEEDS = [
+    'dnsseed.bitcoin.dashjr.org', 
+    'dnsseed.bluematt.me',
+    'seed.bitcoin.sipa.be', 
+    'seed.bitcoinstats.com',
+    'seed.bitcoin.jonasschnelli.ch',
+    'seed.btc.petertodd.org',
+    'seed.bitcoin.sprovoost.nl',
+    'dnsseed.emzy.de',
+]
+
+
+def create_connection(address, timeout=10):
+    if 'onion' in address[0]:
+        return socks.create_connection(
+            address,
+            timeout=timeout,
+            proxy_type=socks.PROXY_TYPE_SOCKS5,
+            proxy_addr="127.0.0.1",
+            proxy_port=9050
+        )
+    else:
+        return socket.create_connection(address, timeout=timeout)
+
+
+def query_dns_seeds():
+    nodes = []
+    for seed in DNS_SEEDS:
+        try:
+            addr_info = socket.getaddrinfo(seed, 8333, 0, socket.SOCK_STREAM)
+            addresses = [ai[-1][:2] for ai in addr_info]
+            nodes.extend([Node(*addr) for addr in addresses])
+        except OSError as e:
+            logger.info(f"DNS seed query failed: {str(e)}")
+    return nodes
+
+
+class Node:
+
+    def __init__(self, ip, port, id=None, next_visit=None, visits_missed=0):
+        if next_visit is None:
+            next_visit = time.time()
+        self.ip = ip
+        self.port = port
+        self.id = id
+        self.next_visit = next_visit
+        self.visits_missed = visits_missed
+
+    @property
+    def address(self):
+        return (self.ip, self.port)
 
 
 class Connection:
 
-    def __init__(self, address, timeout=30):
-        self.address = address
-        self.start = None
+    def __init__(self, node, timeout):
+        self.node = node
         self.timeout = timeout
         self.sock = None
-        self.finished = False
+        self.stream = None
+        self.start = None
 
         # Results
-        self.version_payload = None
-        self.addresses = []
-
-    def timed_out(self):
-        return time.time() > self.start + self.timeout
+        self.peer_version_payload = None
+        self.nodes_discovered = []
 
     def send_version(self):
         payload = serialize_version_payload()
-        msg = serialize_msg(b"version", payload)
+        msg = serialize_msg(command=b"version", payload=payload)
         self.sock.sendall(msg)
 
     def send_verack(self):
-        msg = serialize_msg(b"verack", b"")
+        msg = serialize_msg(command=b"verack")
         self.sock.sendall(msg)
 
+    def send_pong(self, payload):
+        res = serialize_msg(command=b'pong', payload=payload)
+        self.sock.sendall(res)
+
     def send_getaddr(self):
-        self.sock.send(serialize_msg(b"getaddr", b""))
+        self.sock.sendall(serialize_msg(b'getaddr'))
 
-    def handle_version(self, stream):
-        # Interpret payload stream
-        self.version_payload = read_version_payload(stream)
+    def handle_version(self, payload):
+        # Save their version payload
+        stream = BytesIO(payload)
+        self.peer_version_payload = read_version_payload(stream)
 
-        # Save the address & version payload
-        observe_node(self.address, self.version_payload)
-
-        # Complete handshake with a `verack`
+        # Acknowledge
         self.send_verack()
 
-    def handle_verack(self, stream):
-        # With connection established, ask for their peer list
+    def handle_verack(self, payload):
+        # Request peer's peers
         self.send_getaddr()
 
-    def handle_addr(self, stream):
-        # If we receive more than 1, save to queue and mark `self.finished = True`
-        addr_payload = read_addr_payload(stream)
-        if len(addr_payload["addresses"]) > 1:
-            # Record addresses, Crawler will persist these
-            self.addresses = [(a['ip'], a['port']) for a in addr_payload['addresses']]
+    def handle_ping(self, payload):
+        self.send_pong(payload)
 
-            # FIXME: this is noisy
-            num_addrs = len(addr_payload["addresses"])
-            ip = self.address[0]
-            duration = time.time() - self.start
-            logger.info(f'Received {num_addrs} addrs from {ip} after {duration} seconds')
-            self.finished = True
+    def handle_addr(self, payload):
+        payload = read_addr_payload(BytesIO(payload))
+        if len(payload['addresses']) > 1:
+            self.nodes_discovered = [
+                Node(a['ip'], a['port']) for a in payload['addresses']
+            ]
 
-    def handle_msg(self, msg):
-        command_str = msg['command'].decode('utf-8')
-        method = f"handle_{command_str}"
-        if hasattr(self, method):
-            stream = BytesIO(msg['payload'])
-            getattr(self, method)(stream)
+    def handle_msg(self):
+        msg = read_msg(self.stream)
+        command = msg['command'].decode()
+        logger.info(f'Received a "{command}"')
+        method_name = f'handle_{command}'
+        if hasattr(self, method_name):
+            getattr(self, method_name)(msg['payload'])
+
+    def remain_alive(self):
+        timed_out = time.time() - self.start > self.timeout
+        return not timed_out and not self.nodes_discovered
 
     def open(self):
+        # Set start time
         self.start = time.time()
 
-        # Establish TCP connection
-        self.sock = connect(self.address)
-        stream = self.sock.makefile("rb")
+        # Open TCP connection
+        logger.info(f'Connecting to {self.node.ip}')
+        self.sock = create_connection(self.node.address, 
+                                      timeout=self.timeout)
+        self.stream = self.sock.makefile('rb')
 
-        # Start handshake
+        # Start version handshake
         self.send_version()
 
-        # Handle messages until time runs out
-        while not self.timed_out() and not self.finished:
-            msg = read_msg(stream)
-            self.handle_msg(msg)
+        # Handle messages until program exists
+        while self.remain_alive():
+            self.handle_msg()
 
     def close(self):
-        self.finished = False
-        self.sock.close()
+        # Clean up socket's file descriptor
+        if self.sock:
+            self.sock.close()
+
+
+class Worker(threading.Thread):
+
+    def __init__(self, worker_inputs, worker_outputs, timeout):
+        super().__init__()
+        self.worker_inputs = worker_inputs
+        self.worker_outputs = worker_outputs
+        self.timeout = timeout
+
+    def run(self):
+        while True:
+            # Get next node and connect
+            node = self.worker_inputs.get()
+
+            try:
+                conn = Connection(node, timeout=self.timeout)
+                conn.open()
+            except (OSError, BitcoinProtocolError) as e:
+                logger.info(f'Got error: {str(e)}')
+            finally:
+                conn.close()
+
+            # Report results back to the crawler
+            self.worker_outputs.put(conn)
 
 
 class Crawler:
 
-    def __init__(self, address_queue):
-        self.address_queue = address_queue
-        self.visited = set()
-        self.lock = Lock()
+    def __init__(self, num_workers=10, timeout=10):
+        self.timeout = timeout
+        self.worker_inputs = queue.Queue()
+        self.worker_outputs = queue.Queue()
+        self.workers = [
+            Worker(self.worker_inputs, self.worker_outputs, timeout)
+            for _ in range(num_workers)
+        ]
 
+    @property
+    def batch_size(self):
+        return len(self.workers) * 10
 
-    def observe_node(self, connection):
-        observe_node(connection.address, connection.version_payload)
+    def add_worker_inputs(self):
+        nodes = db.next_nodes(self.batch_size)
+        for node in nodes:
+            self.worker_inputs.put(node)
 
-    def get_address(self):
-        """Find an address we haven't visited yet"""
-        while not self.address_queue.empty():
-            address = self.address_queue.get()
-            if address not in self.visited:
-                with self.lock:
-                    self.visited.add(address)
-                return address
+    def process_worker_outputs(self):
+        # Get connections from output queue
+        conns = []
+        while self.worker_outputs.qsize():
+            conns.append(self.worker_outputs.get())
 
-    def put_addresses(self, addresses):
-        """Dump addresses in the queue"""
-        for address in addresses:
-            if address not in self.visited:
-                self.address_queue.put(address)
+        # Flush connection outputs to DB
+        db.process_crawler_outputs(conns)
+
+    def seed_db(self):
+        nodes = [node.__dict__ for node in query_dns_seeds()]
+        db.insert_nodes(nodes)
+
+    def print_report(self):
+        print(f'inputs: {self.worker_inputs.qsize()} | '
+              f'outputs: {self.worker_outputs.qsize()} | '
+              f'visited: {db.nodes_visited()} | '
+              f'total: {db.nodes_total()}')
+
+    def main_loop(self):
+        while True:
+            # Print report
+            self.print_report()
+
+            # Fill input queue if running low
+            if self.worker_inputs.qsize() < self.batch_size:
+                self.add_worker_inputs()
+        
+            # Process worker outputs if running high
+            if self.worker_outputs.qsize() > self.batch_size:
+                self.process_worker_outputs()
+
+            # Only check once per second
+            time.sleep(1)
 
     def crawl(self):
-        while True:
-            address = self.get_address()
+        # Seed database with initial nodes from DNS seeds
+        self.seed_db()
 
-            if not address:  # FIXME better way to exit threads
-                return
+        # Add to worker inputs
+        self.add_worker_inputs()
 
-            try:
-                connection = Connection(address)
-                connection.open()
-            except Exception as e:
-                logging.info(str(e))
-                observe_error(address, str(e))
-                continue
+        # Start workers
+        for worker in self.workers:
+            worker.start()
 
-            connection.close()
-            self.observe_node(connection)
-            self.put_addresses(connection.addresses)
-
-
-def threaded_crawler(address_queue):
-
-    # Run it
-    num_threads = 2000
-    threads = []
-
-    def target():
-        return Crawler(address_queue).crawl()
-
-    for _ in range(num_threads):
-        thread = Thread(target=target)
-        thread.start()
-        threads.append(thread)
-
-    # Generate a little report until the script finishes
-    while True:
-
-        # Break out of loop if all threads are dead
-        if True not in set([t.is_alive() for t in threads]):
-            break
-
-        # Clear terminal window and print fresh report
-        os.system('cls' if os.name == 'nt' else 'clear')
-        report(threads, address_queue)
-        time.sleep(2)
-
-    print("All threads have finished")
-
-
-def synchronous_crawler(address_queue, visited):
-    return Crawler(address_queue, visited).crawl()
-
-
-def main():
-    # Make sure database is set up
-    create_tables()
-
-    # Get addresses, shuffle them, create and fill the queue
-    addresses = fetch_addresses()
-    logger.info(f'DNS lookups returned {len(addresses)} addresses')
-    random.shuffle(addresses)
-    address_queue = Queue()
-    for address in addresses:
-        address_queue.put(address)
-
-    # Run it
-    # synchronous_crawler(address_queue)
-    threaded_crawler(address_queue)
+        # Manage workers until program ends
+        self.main_loop()
 
 
 if __name__ == '__main__':
-    main()
+    # Wipe the database before every run
+    db.drop_and_create_tables()
+
+    # Run the crawler
+    Crawler(num_workers=25, timeout=1).crawl()

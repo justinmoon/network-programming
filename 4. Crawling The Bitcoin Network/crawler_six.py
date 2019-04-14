@@ -230,4 +230,4 @@ if __name__ == '__main__':
     db.drop_and_create_tables()
 
     # Run the crawler
-    Crawler(num_workers=50, timeout=1).crawl()
+    Crawler(num_workers=25, timeout=1).crawl()

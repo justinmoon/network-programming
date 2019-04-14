@@ -1,25 +1,19 @@
 import time
 import socket
-import queue
 import threading
+import queue
 import logging
 
 from io import BytesIO
 
-from lib import handshake, read_msg, serialize_msg, read_varint, read_address, serialize_version_payload, read_version_payload
-import db_three as db
+from lib import handshake, read_msg, serialize_msg, read_varint, read_address, BitcoinProtocolError, serialize_version_payload, read_version_payload
 
-DNS_SEEDS = [
-    'dnsseed.bitcoin.dashjr.org',
-    'dnsseed.bluematt.me',
-    'seed.bitcoin.sipa.be',
-    'seed.bitcoinstats.com',
-    'seed.bitcoin.sprovoost.nl',
-]
+import mydb as db
 
-logging.basicConfig(level="INFO", filename='crawler.log',
-    format='%(threadName)-6s %(asctime)s %(message)s')
+
+logging.basicConfig(level='INFO', filename='crawler.log')
 logger = logging.getLogger(__name__)
+
 
 def read_addr_payload(stream):
     r = {}
@@ -28,29 +22,41 @@ def read_addr_payload(stream):
     return r
 
 
-def fetch_addresses():
-    addresses = []
-    for dns_seed in DNS_SEEDS:
+DNS_SEEDS = [
+    'dnsseed.bitcoin.dashjr.org', 
+    'dnsseed.bluematt.me',
+    'seed.bitcoin.sipa.be', 
+    'seed.bitcoinstats.com',
+    'seed.bitcoin.jonasschnelli.ch',
+    'seed.btc.petertodd.org',
+    'seed.bitcoin.sprovoost.nl',
+    'dnsseed.emzy.de',
+]
+
+
+def query_dns_seeds():
+    nodes = []
+    for seed in DNS_SEEDS:
         try:
-            addr_info = socket.getaddrinfo(dns_seed, 8333)
-            new_addresses = [ai[-1][:2] for ai in addr_info]
-            addresses.extend(list(set(new_addresses)))
-        except:
-            logging.info(f'Encountered error connecting to {dns_seed}')
-    return addresses
+            addr_info = socket.getaddrinfo(seed, 8333, 0, socket.SOCK_STREAM)
+            addresses = [ai[-1][:2] for ai in addr_info]
+            nodes.extend([Node(*addr) for addr in addresses])
+        except OSError as e:
+            logger.info(f"DNS seed query failed: {str(e)}")
+    return nodes
 
 
 class Node:
 
-    def __init__(self, ip, port, id=None, next_connection_at=None, connections_missed=0):
-        if not next_connection_at:
-            next_connection_at = time.time()
+    def __init__(self, ip, port, id=None, next_visit=None, visits_missed=0):
+        if next_visit is None:
+            next_visit = time.time()
         self.ip = ip
         self.port = port
         self.id = id
-        self.next_connection_at = next_connection_at
-        self.connections_missed = connections_missed
-        
+        self.next_visit = next_visit
+        self.visits_missed = visits_missed
+
     @property
     def address(self):
         return (self.ip, self.port)
@@ -58,16 +64,15 @@ class Node:
 
 class Connection:
 
-    def __init__(self, node, timeout=20):
+    def __init__(self, node, timeout):
         self.node = node
-        self.sock = None
         self.timeout = timeout
-        self.handshake_start = None
-        self.handshake_end = None
+        self.sock = None
+        self.stream = None
+        self.start = None
 
         # Results
-        self.error = None
-        self.version_payload = None
+        self.peer_version_payload = None
         self.nodes_discovered = []
 
     def send_version(self):
@@ -76,7 +81,8 @@ class Connection:
         self.sock.sendall(msg)
 
     def send_verack(self):
-        self.sock.sendall(serialize_msg(command=b"verack"))
+        msg = serialize_msg(command=b"verack")
+        self.sock.sendall(msg)
 
     def send_pong(self, payload):
         res = serialize_msg(command=b'pong', payload=payload)
@@ -86,19 +92,15 @@ class Connection:
         self.sock.sendall(serialize_msg(b'getaddr'))
 
     def handle_version(self, payload):
-        # Save version payload
+        # Save their version payload
         stream = BytesIO(payload)
-        version_payload = read_version_payload(stream)
-        self.version_payload = version_payload
+        self.peer_version_payload = read_version_payload(stream)
 
-        # Next step in version handshake
+        # Acknowledge
         self.send_verack()
 
     def handle_verack(self, payload):
-        # Mark the connection as complete
-        self.handshake_end = time.time()
-
-        # Request their addresses
+        # Request peer's peers
         self.send_getaddr()
 
     def handle_ping(self, payload):
@@ -107,123 +109,143 @@ class Connection:
     def handle_addr(self, payload):
         payload = read_addr_payload(BytesIO(payload))
         if len(payload['addresses']) > 1:
-            # persist addresses and exit connection
             self.nodes_discovered = [
                 Node(a['ip'], a['port']) for a in payload['addresses']
             ]
 
-    def handle_msg(self, msg):
+    def handle_msg(self):
+        msg = read_msg(self.stream)
         command = msg['command'].decode()
-        logging.info(f'Received a "{command}" of {len(msg["payload"])} bytes')
-        method = f'handle_{command}'  # handle_addr, handle_block, etc
-        if hasattr(self, method):
-            getattr(self, method)(msg['payload'])
+        logger.info(f'Received a "{command}"')
+        method_name = f'handle_{command}'
+        if hasattr(self, method_name):
+            getattr(self, method_name)(msg['payload'])
 
     def remain_alive(self):
-        awaiting_addr = len(self.nodes_discovered) == 0
-        elapsed = time.time() - self.handshake_start
-        timed_out = elapsed > self.timeout
-        return awaiting_addr and not timed_out
+        timed_out = time.time() - self.start > self.timeout
+        return not timed_out and not self.nodes_discovered
 
     def open(self):
-        self.handshake_start = time.time()
+        # Set start time
+        self.start = time.time()
 
-        # TODO: get at the VERSION message
-        self.sock = socket.create_connection(self.node.address, timeout=self.timeout)
-        stream = self.sock.makefile('rb')
+        # Open TCP connection
+        logger.info(f'Connecting to {self.node.ip}')
+        self.sock = socket.create_connection(self.node.address, 
+                                             timeout=self.timeout)
+        self.stream = self.sock.makefile('rb')
 
-        # Initiate version handshake
+        # Start version handshake
         self.send_version()
 
+        # Handle messages until program exists
         while self.remain_alive():
-            msg = read_msg(stream)
-            self.handle_msg(msg)
+            self.handle_msg()
 
     def close(self):
+        # Clean up socket's file descriptor
         if self.sock:
             self.sock.close()
 
 
 class Worker(threading.Thread):
 
-    def __init__(self, inputs, outputs):
-        threading.Thread.__init__(self)
-        self.inputs = inputs
-        self.outputs = outputs
+    def __init__(self, worker_inputs, worker_outputs, timeout):
+        super().__init__()
+        self.worker_inputs = worker_inputs
+        self.worker_outputs = worker_outputs
+        self.timeout = timeout
 
     def run(self):
-        logging.info('Starting')
         while True:
-            # Get next address from addresses and connect
-            node = self.inputs.get()
+            # Get next node and connect
+            node = self.worker_inputs.get()
 
             try:
-                # Establish connection
-                logging.info(f'Connecting to {node.address}')
-                conn = Connection(node, timeout=1)
+                conn = Connection(node, timeout=self.timeout)
                 conn.open()
-                logging.info(f'Received {len(conn.nodes_discovered)} addresses from {node.address}')
-
-            except Exception as e:
-                logging.info(f'Got error: {str(e)}')
-                continue
-            
+            except (OSError, BitcoinProtocolError) as e:
+                logger.info(f'Got error: {str(e)}')
             finally:
                 conn.close()
-                self.outputs.put(conn)
+
+            # Report results back to the crawler
+            self.worker_outputs.put(conn)
+
 
 class Crawler:
 
-    def __init__(self, num_workers):
+    def __init__(self, num_workers=10, timeout=10):
+        self.timeout = timeout
         self.worker_inputs = queue.Queue()
         self.worker_outputs = queue.Queue()
-        self.workers = [Worker(self.worker_inputs, self.worker_outputs)
-                        for _ in range(num_workers)]
+        self.workers = [
+            Worker(self.worker_inputs, self.worker_outputs, timeout)
+            for _ in range(num_workers)
+        ]
 
-    def prime_from_dns_seeds(self):
-        addresses = fetch_addresses()
-        for address in addresses:
-            db.insert_node(Node(address[0], address[1]).__dict__)
-        logging.info(f'Fetched {len(addresses)} addresses')
-        self.prime_from_db()
+    @property
+    def batch_size(self):
+        return len(self.workers) * 10
 
-    def prime_from_db(self):
-        for node in db.nodes_due(len(self.workers)*10):
+    def add_worker_inputs(self):
+        nodes = db.next_nodes(self.batch_size)
+        for node in nodes:
             self.worker_inputs.put(node)
 
+    def process_worker_outputs(self):
+        # Get connections from output queue
+        conns = []
+        while self.worker_outputs.qsize():
+            conns.append(self.worker_outputs.get())
+
+        # Flush connection outputs to DB
+        db.process_crawler_outputs(conns)
+
+    def seed_db(self):
+        nodes = [node.__dict__ for node in query_dns_seeds()]
+        db.insert_nodes(nodes)
+
     def print_report(self):
-        print(f'Inputs: {self.worker_inputs.qsize()} | Outputs: {self.worker_outputs.qsize()} | Node Count: {db.count_nodes()}')
+        print(f'inputs: {self.worker_inputs.qsize()} | '
+              f'outputs: {self.worker_outputs.qsize()} | '
+              f'visited: {db.nodes_visited()} | '
+              f'total: {db.nodes_total()}')
 
     def main_loop(self):
         while True:
-            # Print status report
+            # Print report
             self.print_report()
 
-            # Save when outputs read a certain size
-            if self.worker_outputs.qsize() > len(self.workers)*10:
-                db.record_worker_outputs(self.get_worker_outputs())
+            # Fill input queue if running low
+            if self.worker_inputs.qsize() < self.batch_size:
+                self.add_worker_inputs()
+        
+            # Process worker outputs if running high
+            if self.worker_outputs.qsize() > self.batch_size:
+                self.process_worker_outputs()
 
-            # Hydrate when inputs get too low
-            if self.worker_inputs.qsize() < len(self.workers)*10:
-                self.prime_from_db()
-
-            # Make sure we don't hammer the database too heavily
+            # Only check once per second
             time.sleep(1)
 
     def crawl(self):
-        # Fill the work queue
-        self.prime_from_dns_seeds()
+        # Seed database with initial nodes from DNS seeds
+        self.seed_db()
 
-        # Run the workers
+        # Add to worker inputs
+        self.add_worker_inputs()
+
+        # Start workers
         for worker in self.workers:
             worker.start()
-        
-        # Manage inputs and outputs
+
+        # Manage workers until program ends
         self.main_loop()
 
+
 if __name__ == '__main__':
-    # Delete and recreate the database
+    # Wipe the database before every run
     db.drop_and_create_tables()
 
     # Run the crawler
-    Crawler(10).crawl()
+    Crawler(num_workers=25, timeout=1).crawl()

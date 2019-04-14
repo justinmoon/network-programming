@@ -212,4 +212,4 @@ class Crawler:
 
 
 if __name__ == '__main__':
-    Crawler(num_workers=500, timeout=1).crawl()
+    Crawler(num_workers=25, timeout=1).crawl()

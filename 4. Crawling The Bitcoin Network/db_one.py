@@ -104,10 +104,10 @@ def next_nodes(n):
         SELECT *
         FROM nodes
         WHERE id NOT IN (SELECT node_id FROM connections)
-        ORDER BY id DESC
         LIMIT ?""",
         (n,),
-        row_factory=node_factory).fetchall()
+        row_factory=node_factory
+    ).fetchall()
 
 
 def nodes_visited():
