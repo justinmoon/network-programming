@@ -2,6 +2,7 @@ atomicwrites==1.2.1
 attrs==18.2.0
 autopep8==1.4.3
 backcall==0.1.0
+bitcoin-ecc==0.0.1
 bleach==3.1.0
 certifi==2018.11.29
 chardet==3.0.4
@@ -74,3 +75,7 @@ wcwidth==0.1.7
 webencodings==0.5.1
 widgetsnbextension==3.4.2
 yapf==0.25.0
+
+git+https://github.com/justinmoon/python-ecdsa.git@b3c02e84dd2170a38b79e7d7bfb79d4643535c40#egg=ecdsa
+
+
