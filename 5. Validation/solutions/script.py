@@ -133,7 +133,6 @@ class Script:
         altstack = []
         while len(cmds) > 0:
             cmd = cmds.pop(0)
-            print(cmd)
             if type(cmd) == int:
                 # do what the opcode says
                 operation = OP_CODE_FUNCTIONS[cmd]
@@ -166,38 +165,25 @@ class Script:
             return False
         return True
 
-from ecc import PrivateKey, N, S256Point
-from random import randint
-from io import BytesIO
-
 class ScriptTest(TestCase):
 
-    def test_ecc(self):
-        secret = randint(0, N)
-        pk = PrivateKey(secret)
-        print(pk.point)
-        z = randint(0, 2**256)
-        sig = pk.sign(z)
-        self.assertTrue(pk.point.verify(z, sig))
-
-        sec = pk.point.sec()
-        point = S256Point.parse(sec)
-        self.assertEqual(point, pk.point)
-
-
-
     def test_p2pk_script(self):
+        from ecc import PrivateKey, N, S256Point, Signature
+        from random import randint
+        from io import BytesIO
 
+        # public key
         secret = randint(0, N)
         pk = PrivateKey(secret)
+        sec = pk.point.sec(compressed=False)
+
+        # signature
         z = randint(0, 2**256)
         sig = pk.sign(z)
+        der = sig.der() + b'\x01'  # append SIGHASH_ALL
 
-        sec = pk.point.sec(compressed=False)
-        der = sig.der()
-
+        # construct and verify P2PK script
         script_pubkey = p2pk_script(sec)
         script_sig = Script([der])
         combined_script = script_sig + script_pubkey
         self.assertTrue(combined_script.evaluate(z))
-

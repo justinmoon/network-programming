@@ -38,10 +38,20 @@ FIXME:
     - print out the node state
         
 # types of bad blocks
+
 - hash doesn't match
-- missing coinbase
-- coinbase pays too much
-- multiple coinbases
+
+- proof
+
+- coinbase
+    - missing
+    - not exactly 1 input
+    - prev_tx != b"0"*32
+    - index != b"f"*32
+    - violates bip34 (could skip b/c wasn't around at genesis block)
+    - multiple coinbases
+    - overpays (cover difficulty adjustment or no?)
+
 - block exceeds block weight limit (give them a 10 megabyte block)
     - is this even relevant???
 - merkle_root doesn't match

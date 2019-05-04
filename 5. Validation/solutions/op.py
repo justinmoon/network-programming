@@ -662,7 +662,6 @@ def op_hash256(stack):
 def op_checksig(stack, z):
     # check that there are at least 2 elements on the stack
     if len(stack) < 2:
-        print('stack too small')
         return False
     # the top element of the stack is the SEC pubkey
     sec_pubkey = stack.pop()
@@ -672,7 +671,6 @@ def op_checksig(stack, z):
     # parse the serialized pubkey and signature into objects
     try:
         point = S256Point.parse(sec_pubkey)
-        print(point)
         sig = Signature.parse(der_signature)
     except (ValueError, SyntaxError) as e:
         LOGGER.info(e)

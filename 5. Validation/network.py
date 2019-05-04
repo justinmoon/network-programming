@@ -482,7 +482,7 @@ class SimpleNode:
             envelope = self.read()
             # set the command to be evaluated
             command = envelope.command
-            print(command)
+            # print(command)
             # we know how to respond to version and ping, handle that here
             if command == VersionMessage.command:
                 # send verack
