@@ -1,12 +1,13 @@
 from io import BytesIO
 from unittest import TestCase
 
-from helper import little_endian_to_int, int_to_little_endian, hash256, read_varint
+from helper import little_endian_to_int, int_to_little_endian, hash256, read_varint, encode_varint
 
 from tx import Tx
 
 GENESIS_BLOCK = bytes.fromhex('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c')
 
+FULL_GENESIS_BLOCK = bytes.fromhex('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000')
 
 class BlockHeader:
 
@@ -68,21 +69,55 @@ class Block(BlockHeader):
 
     def __init__(self, version, prev_block, merkle_root,
                  timestamp, bits, nonce, txns):
-        print(super())
-        BlockHeader.__init__(version, prev_block, merkle_root,
+        BlockHeader.__init__(self, version, prev_block, merkle_root,
                          timestamp, bits, nonce)
         self.txns = txns
 
     @classmethod
     def parse(cls, s):
-        block = BlockHeader.parse(s)  # FIXME
+        '''Takes a byte stream and parses a block. Returns a Block object'''
+        # s.read(n) will read n bytes from the stream
+        # version - 4 bytes, little endian, interpret as int
+        version = little_endian_to_int(s.read(4))
+        # prev_block - 32 bytes, little endian (use [::-1] to reverse)
+        prev_block = s.read(32)[::-1]
+        # merkle_root - 32 bytes, little endian (use [::-1] to reverse)
+        merkle_root = s.read(32)[::-1]
+        # timestamp - 4 bytes, little endian, interpret as int
+        timestamp = little_endian_to_int(s.read(4))
+        # bits - 4 bytes
+        bits = s.read(4)
+        # nonce - 4 bytes
+        nonce = s.read(4)
         # num_txns - varint
         num_txns = read_varint(s)
         # num_txns many transactions remain
-        block.txns = []
+        txns = []
         for _ in range(num_txns):
-            block.txns.append(Tx.parse(s))
-        return block
+            txns.append(Tx.parse(s))
+        return cls(version, prev_block, merkle_root, timestamp, bits, nonce, txns)
+
+    def serialize(self):
+        result = BlockHeader.serialize(self)
+        result += encode_varint(len(self.txns))
+        for tx in self.txns:
+            result += tx.serialize()
+        return result
+
+    def __repr__(self):
+        txns_str = ''
+        for tx in self.txns:
+            txns_str += '\n' + repr(tx)
+
+        return 'version: {}\nprev_block: {}\nmerkle_root: {}\ntimestamp: {}\nbits: {}\nnonce: {}\ntxns: \n{}'.format(
+            self.version,
+            self.prev_block,
+            self.merkle_root,
+            self.timestamp,
+            self.bits,
+            self.nonce,
+            txns_str,
+        )
 
 
 class BlockTest(TestCase):

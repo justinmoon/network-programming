@@ -324,7 +324,7 @@ class HeadersMessageTest(TestCase):
         headers = HeadersMessage.parse(stream)
         self.assertEqual(len(headers.blocks), 2)
         for b in headers.blocks:
-            self.assertEqual(b.__class__, Block)
+            self.assertEqual(b.__class__, BlockHeader)
 
 
 class GetDataMessage:
