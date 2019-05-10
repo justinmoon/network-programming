@@ -1,7 +1,7 @@
 from io import BytesIO
 from unittest import TestCase
 
-from helper import little_endian_to_int, int_to_little_endian, hash256, read_varint, encode_varint
+from helper import little_endian_to_int, int_to_little_endian, hash256, read_varint, encode_varint, bits_to_target
 
 from tx import Tx
 
@@ -63,6 +63,19 @@ class BlockHeader:
         h256 = hash256(s)
         # reverse
         return h256[::-1]
+
+    def check_pow(self):
+        '''Returns whether this block satisfies proof of work'''
+        # get the hash256 of the serialization of this block
+        h256 = hash256(self.serialize())
+        # interpret this hash as a little-endian number
+        proof = little_endian_to_int(h256)
+        # return whether this integer is less than the target
+        return proof < self.target()
+
+    def target(self):
+        '''Returns the proof-of-work target based on the bits'''
+        return bits_to_target(self.bits)
 
 
 class Block(BlockHeader):

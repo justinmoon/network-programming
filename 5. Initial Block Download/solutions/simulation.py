@@ -48,6 +48,11 @@ def mine(block):
         else:
             nonce += 1
 
+def mine(block):
+    while not block.check_pow():
+        block.nonce = int_to_little_endian(little_endian_to_int(block.nonce) + 1, 4)
+    return block
+
 def prepare_coinbase(sec):
     tx_in = TxIn(
         prev_tx=b'\x00'*32,
@@ -98,12 +103,28 @@ def wrong_bits(blockchain):
     ])
     return block, valid, hints
 
+def insufficient_proof(blockchain):
+    block = Block(
+        version=1,
+        prev_block=blockchain.headers[-1].hash(),
+        merkle_root=merkle_root([b'xyz']),  # FIXME
+        timestamp=int(time.time()),
+        bits=starting_bits,
+        nonce=b'\x00\x00\x00\x00',
+        txns=[prepare_coinbase(bob_sec)]
+    )
+    assert not block.check_pow()
+    valid = False
+    hints = make_hints([
+        f'Proof-of-Work not satisfied',
+    ])
+    return block, valid, hints
 
 def missing_coinbase(blockchain):
     block = mine(Block(
         version=1,
         prev_block=blockchain.headers[-1].hash(),
-        merkle_root=merkle_root([b'xyz']),
+        merkle_root=merkle_root([b'xyz']),  # FIXME
         timestamp=int(time.time()),
         bits=starting_bits,
         nonce=b'\x00\x00\x00\x00',
@@ -120,6 +141,7 @@ def missing_coinbase(blockchain):
 def simulate():
     scenarios = [
         wrong_bits,
+        insufficient_proof,
         missing_coinbase,
     ]
     blockchain = Blockchain()
@@ -138,6 +160,7 @@ def simulate():
             return fail(blockchain, block, hints)
         elif not valid and not accepted:
             print(f'Pass: rejected invalid block at height {num_blocks}')
+    print('All tests passed!')
 
 
 if __name__ == '__main__':

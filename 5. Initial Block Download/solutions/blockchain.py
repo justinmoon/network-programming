@@ -44,8 +44,13 @@ class Blockchain:
 
     def validate_block(self, block):
         if block.bits != starting_bits:
+            print('bad bits')
+            return False
+        if not block.check_pow():
+            print('bad pow')
             return False
         if not len(block.txns):
+            print('bad txns')
             return False
         return True
 
