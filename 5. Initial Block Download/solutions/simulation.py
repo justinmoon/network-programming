@@ -1,4 +1,5 @@
 import time
+from os import urandom
 from unittest import TestCase
 from io import BytesIO
 
@@ -11,12 +12,22 @@ from block import Block, FULL_GENESIS_BLOCK
 
 
 genesis = Block.parse(BytesIO(FULL_GENESIS_BLOCK))
-staring_bits = target_to_bits(16**62)
+starting_bits = target_to_bits(16**62)
 
 
 def create_sk(secret):
     return SigningKey.from_secret_exponent(secret,
             curve=SECP256k1, hashfunc=lambda x: x)
+
+
+# some private keys
+bob_sk = create_sk(100)
+bob_vk = bob_sk.verifying_key
+bob_sec = bob_vk.to_sec(compressed=False)
+
+alice_sk = create_sk(100)
+alice_vk = alice_sk.verifying_key
+alice_sec = alice_vk.to_sec(compressed=False)
 
 
 def tx_hashes(txns):
@@ -37,6 +48,23 @@ def mine(block):
         else:
             nonce += 1
 
+def prepare_coinbase(sec):
+    tx_in = TxIn(
+        prev_tx=b'\x00'*32,
+        prev_index=0xffffffff,
+        script_sig=p2pk_script(urandom(10)),
+    )
+    tx_out = TxOut(
+        amount=50*100_000_000,
+        script_pubkey=p2pk_script(sec),
+    )
+    return Tx(
+        version=1,
+        tx_ins=[tx_in], 
+        tx_outs=[tx_out],
+        locktime=0,
+    )
+
 
 def make_hints(hints):
     for hint in hints:
@@ -54,13 +82,30 @@ def fail(chain, blk, _hints):
     hints = _hints
 
 
+def wrong_bits(blockchain):
+    block = mine(Block(
+        version=1,
+        prev_block=blockchain.headers[-1].hash(),
+        merkle_root=merkle_root([b'xyz']),
+        timestamp=int(time.time()),
+        bits=target_to_bits(16**63),
+        nonce=b'\x00\x00\x00\x00',
+        txns=[prepare_coinbase(bob_sec)]
+    ))
+    valid = False
+    hints = make_hints([
+        f'Block.bits should be {repr(starting_bits)}',
+    ])
+    return block, valid, hints
+
+
 def missing_coinbase(blockchain):
     block = mine(Block(
         version=1,
         prev_block=blockchain.headers[-1].hash(),
         merkle_root=merkle_root([b'xyz']),
         timestamp=int(time.time()),
-        bits=staring_bits,
+        bits=starting_bits,
         nonce=b'\x00\x00\x00\x00',
         txns=[]
     ))
@@ -74,23 +119,25 @@ def missing_coinbase(blockchain):
 
 def simulate():
     scenarios = [
+        wrong_bits,
         missing_coinbase,
     ]
     blockchain = Blockchain()
     for scenario in scenarios:
-        block, valid, hints = missing_coinbase(blockchain)
+        block, valid, hints = scenario(blockchain)
         accepted = blockchain.receive_block(block)
-        height = len(blockchain.blocks) - 1
+        num_blocks = len(blockchain.blocks)
+        # FIXME: would be nice if the reasons for rejection showed up here
         if valid and accepted:
-            print(f'Pass: accepted valid block at height {height}')
+            print(f'Pass: accepted valid block at height {num_blocks-1}')
         elif valid and not accepted:
-            print(f'Fail: rejected valid block at height {height}')
+            print(f'Fail: rejected valid block at height {num_blocks}')
             return fail(blockchain, block, hints)
         elif not valid and accepted:
-            print(f'Fail: accepted invalid block at height {height}')
+            print(f'Fail: accepted invalid block at height {num_blocks-1}')
             return fail(blockchain, block, hints)
         elif not valid and not accepted:
-            print(f'Pass: rejected invalid block at height {height}')
+            print(f'Pass: rejected invalid block at height {num_blocks}')
 
 
 if __name__ == '__main__':

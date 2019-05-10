@@ -1,10 +1,11 @@
 from io import BytesIO
 from network import SimpleNode, GetHeadersMessage, HeadersMessage, GetDataMessage, InvMessage, BlockMessage, InventoryItem
 from block import BlockHeader, Block, GENESIS_BLOCK
-from helper import int_to_little_endian, little_endian_to_int, encode_varint, read_varint
+from helper import int_to_little_endian, little_endian_to_int, encode_varint, read_varint, target_to_bits
 
 genesis_parsed = BlockHeader.parse(BytesIO(GENESIS_BLOCK))
 
+starting_bits = target_to_bits(16**62)  # FIXME should we pass to Blockchin class?
 
 class Blockchain:
 
@@ -42,11 +43,13 @@ class Blockchain:
         self.node.send(getdata_message)
 
     def validate_block(self, block):
+        if block.bits != starting_bits:
+            return False
         if not len(block.txns):
             return False
+        return True
 
     def receive_block(self, block):
-        return True
         if not self.validate_block(block):
             return False
         else:
