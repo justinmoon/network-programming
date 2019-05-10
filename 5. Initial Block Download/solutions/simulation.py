@@ -48,6 +48,13 @@ def mine(block):
             nonce += 1
 
 
+def make_hints(hints):
+    for hint in hints:
+        yield hint
+    while True:
+        yield 'No more hints'
+
+
 def missing_coinbase(blockchain):
     block = mine(Block(
         version=1,
@@ -58,29 +65,29 @@ def missing_coinbase(blockchain):
         nonce=b'\x00\x00\x00\x00',
         txns=[]
     ))
-    return block
+    hints = make_hints([
+        "Look block.txns",
+        "Coinbase is missing",
+    ])
+    return block, hints
 
-def missing_coinbase_hints():
-    yield "Look block.txns"
-    yield "Coinbase is missing"
 
-
-def fail(chain, blk, hints_func):
+def fail(chain, blk, _hints):
     global blockchain
     global block
     global hints
     blockchain = chain
     block = blk
-    hints = hints_func()
+    hints = _hints
 
 
 def simulation():
     blockchain = Blockchain()
-    block = missing_coinbase(blockchain)
+    block, hints = missing_coinbase(blockchain)
     try:
         blockchain.receive_block(block)
         print(f'Error: you accepted a bad block at height {len(blockchain.blocks)-1}')
-        fail(blockchain, block, missing_coinbase_hints)
+        fail(blockchain, block, hints)
         return
     except ConsensusError as e:
         print(f'Block at height {len(blockchain.blocks)-1} correctly accepted')
