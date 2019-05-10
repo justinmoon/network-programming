@@ -13,6 +13,7 @@ class Blockchain:
         # (txid, index) -> ???
         self.headers = [genesis_parsed]
         self.blocks = [genesis_parsed]  # think this is unspendable ???
+        self.utxo_set = {}
         self.node = SimpleNode('mainnet.programmingbitcoin.com', testnet=False)
 
     def validate_header(self, header):
@@ -50,14 +51,26 @@ class Blockchain:
             print('bad pow')
             return False
         if not len(block.txns):
-            print('bad txns')
+            print('missing coinbase')
+            return False
+        if not block.txns[0].is_valid_coinbase():
+            print('bad coinbase')
             return False
         return True
+
+    def update_utxo_set(self, block):
+        for tx in block.txns:
+            for index, tx_out in enumerate(tx.tx_outs):
+                outpoint = (tx.id(), index)
+                self.utxo_set[outpoint] = tx_out
+        print(self.utxo_set)
+
 
     def receive_block(self, block):
         if not self.validate_block(block):
             return False
         else:
+            self.update_utxo_set(block)
             self.blocks.append(block)
             return True
 

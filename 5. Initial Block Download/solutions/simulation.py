@@ -172,12 +172,33 @@ def bad_coinbase(blockchain):
     return block, valid, hints
 
 
+def good_coinbase(blockchain):
+    coinbase = prepare_coinbase(bob_sec)
+    block = mine(Block(
+        version=1,
+        prev_block=blockchain.headers[-1].hash(),
+        merkle_root=merkle_root([coinbase.hash()]),  # FIXME
+        timestamp=int(time.time()),
+        bits=starting_bits,
+        nonce=b'\x00\x00\x00\x00',
+        txns=[coinbase]
+    ))
+    valid = True
+    hints = make_hints([
+        'We need to update the utxo set'
+    ])
+    # FIXME: check that utxo_set was updated
+    return block, valid, hints
+
+
+
 def simulate():
     scenarios = [
         wrong_bits,
         insufficient_proof,
         missing_coinbase,
         bad_coinbase,
+        good_coinbase,
     ]
     blockchain = Blockchain()
     for scenario in scenarios:
