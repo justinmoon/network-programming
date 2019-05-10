@@ -138,11 +138,46 @@ def missing_coinbase(blockchain):
     return block, valid, hints
 
 
+def bad_coinbase(blockchain):
+    # this scenario sucks b/c we test multiple things and it's unclear whether the latter
+    # checks are even happening
+    tx_in = TxIn(
+        prev_tx=b'\x00'*32,
+        prev_index=0xffffffff,
+        script_sig=p2pk_script(urandom(10)),
+    )
+    tx_out = TxOut(
+        amount=100*100_000_000,
+        script_pubkey=p2pk_script(bob_sec),
+    )
+    coinbase = Tx(
+        version=1,
+        tx_ins=[tx_in],
+        tx_outs=[tx_out],
+        locktime=0,
+    )
+    block = mine(Block(
+        version=1,
+        prev_block=blockchain.headers[-1].hash(),
+        merkle_root=merkle_root([coinbase.hash()]),  # FIXME
+        timestamp=int(time.time()),
+        bits=starting_bits,
+        nonce=b'\x00\x00\x00\x00',
+        txns=[coinbase]
+    ))
+    valid = False
+    hints = make_hints([
+        "Bad coinbase",
+    ])
+    return block, valid, hints
+
+
 def simulate():
     scenarios = [
         wrong_bits,
         insufficient_proof,
         missing_coinbase,
+        bad_coinbase,
     ]
     blockchain = Blockchain()
     for scenario in scenarios:
@@ -192,7 +227,7 @@ class RandomTests(TestCase):
             prev_block=genesis.hash(),
             merkle_root=merkle_root([coinbase.hash()]),
             timestamp=int(time.time()),
-            bits=bits,
+            bits=starting_bits,
             nonce=b'\x00\x00\x00\x00',
             txns=[coinbase]
         ))

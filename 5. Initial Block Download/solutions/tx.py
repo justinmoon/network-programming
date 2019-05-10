@@ -86,6 +86,25 @@ class Tx:
         result += int_to_little_endian(self.locktime, 4)
         return result
 
+    def is_valid_coinbase(self):
+        '''Returns whether this transaction is a coinbase transaction or not'''
+        # check that there is exactly 1 input
+        if len(self.tx_ins) != 1:
+            return False
+        # grab the first input
+        first_input = self.tx_ins[0]
+        # check that first input prev_tx is b'\x00' * 32 bytes
+        if first_input.prev_tx != b'\x00' * 32:
+            return False
+        # check that first input prev_index is 0xffffffff
+        if first_input.prev_index != 0xffffffff:
+            return False
+        first_output = self.tx_outs[0]
+        if not first_output.amount == 50*100_000_000:
+            return False
+        return True
+
+
 
 class TxIn:
 
