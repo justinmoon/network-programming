@@ -3,7 +3,7 @@ from unittest import TestCase
 from io import BytesIO
 
 from ecdsa import SigningKey, SECP256k1
-from blockchain import Blockchain, ConsensusError
+from blockchain import Blockchain
 from tx import TxIn, Tx, TxOut
 from script import Script, p2pk_script
 from helper import little_endian_to_int, int_to_little_endian, merkle_root, target_to_bits, bits_to_target, hash256
@@ -11,26 +11,16 @@ from block import Block, FULL_GENESIS_BLOCK
 
 
 genesis = Block.parse(BytesIO(FULL_GENESIS_BLOCK))
+staring_bits = target_to_bits(16**62)
 
-bits = target_to_bits(16**62)
 
 def create_sk(secret):
     return SigningKey.from_secret_exponent(secret,
             curve=SECP256k1, hashfunc=lambda x: x)
 
 
-def one_insufficient_proof():
-    proof = b'1111111111111111111111111111111111111111111111111111111111111111'
-    coinbase = Tx()
-
-
 def tx_hashes(txns):
     return [tx.hash() for tx in txns]
-
-
-
-def simulate():
-    blockchain = Blockchain()
 
 
 def mine(block):
@@ -55,23 +45,6 @@ def make_hints(hints):
         yield 'No more hints'
 
 
-def missing_coinbase(blockchain):
-    block = mine(Block(
-        version=1,
-        prev_block=blockchain.headers[-1].hash(),
-        merkle_root=merkle_root([b'xyz']),
-        timestamp=int(time.time()),
-        bits=bits,
-        nonce=b'\x00\x00\x00\x00',
-        txns=[]
-    ))
-    hints = make_hints([
-        "Look block.txns",
-        "Coinbase is missing",
-    ])
-    return block, hints
-
-
 def fail(chain, blk, _hints):
     global blockchain
     global block
@@ -81,21 +54,47 @@ def fail(chain, blk, _hints):
     hints = _hints
 
 
-def simulation():
-    blockchain = Blockchain()
-    block, hints = missing_coinbase(blockchain)
-    try:
-        blockchain.receive_block(block)
-        print(f'Error: you accepted a bad block at height {len(blockchain.blocks)-1}')
-        fail(blockchain, block, hints)
-        return
-    except ConsensusError as e:
-        print(f'Block at height {len(blockchain.blocks)-1} correctly accepted')
+def missing_coinbase(blockchain):
+    block = mine(Block(
+        version=1,
+        prev_block=blockchain.headers[-1].hash(),
+        merkle_root=merkle_root([b'xyz']),
+        timestamp=int(time.time()),
+        bits=staring_bits,
+        nonce=b'\x00\x00\x00\x00',
+        txns=[]
+    ))
+    valid = False
+    hints = make_hints([
+        "Look block.txns",
+        "Coinbase is missing",
+    ])
+    return block, valid, hints
 
-    print('All tests pass!')
+
+def simulate():
+    scenarios = [
+        missing_coinbase,
+    ]
+    blockchain = Blockchain()
+    for scenario in scenarios:
+        block, valid, hints = missing_coinbase(blockchain)
+        accepted = blockchain.receive_block(block)
+        height = len(blockchain.blocks) - 1
+        if valid and accepted:
+            print(f'Pass: accepted valid block at height {height}')
+        elif valid and not accepted:
+            print(f'Fail: rejected valid block at height {height}')
+            return fail(blockchain, block, hints)
+        elif not valid and accepted:
+            print(f'Fail: accepted invalid block at height {height}')
+            return fail(blockchain, block, hints)
+        elif not valid and not accepted:
+            print(f'Pass: rejected invalid block at height {height}')
+
 
 if __name__ == '__main__':
-    simulation()
+    simulate()
 
 
 class RandomTests(TestCase):

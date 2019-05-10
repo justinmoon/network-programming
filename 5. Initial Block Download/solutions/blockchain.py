@@ -6,10 +6,6 @@ from helper import int_to_little_endian, little_endian_to_int, encode_varint, re
 genesis_parsed = BlockHeader.parse(BytesIO(GENESIS_BLOCK))
 
 
-class ConsensusError(Exception):
-    pass
-
-
 class Blockchain:
 
     def __init__(self):
@@ -47,11 +43,15 @@ class Blockchain:
 
     def validate_block(self, block):
         if not len(block.txns):
-            raise ConsensusError('coinbase missing')
+            return False
 
     def receive_block(self, block):
-        self.validate_block(block)
-        self.blocks.append(block)
+        return True
+        if not self.validate_block(block):
+            return False
+        else:
+            self.blocks.append(block)
+            return True
 
     def download_blocks(self):
         while len(self.blocks) < len(self.headers):
