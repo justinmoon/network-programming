@@ -25,7 +25,7 @@ bob_sk = create_sk(100)
 bob_vk = bob_sk.verifying_key
 bob_sec = bob_vk.to_sec(compressed=False)
 
-alice_sk = create_sk(100)
+alice_sk = create_sk(200)
 alice_vk = alice_sk.verifying_key
 alice_sec = alice_vk.to_sec(compressed=False)
 
@@ -185,11 +185,91 @@ def good_coinbase(blockchain):
     ))
     valid = True
     hints = make_hints([
-        'We need to update the utxo set'
+        'We need to update the utxo set',
     ])
     # FIXME: check that utxo_set was updated
     return block, valid, hints
 
+
+def spend_nonexistant_output(blockchain):
+    coinbase = prepare_coinbase(bob_sec)
+    tx_in = TxIn(
+        prev_tx=urandom(32),
+        prev_index=0,
+        script_sig=p2pk_script(bob_sec),
+    )
+    tx_out = TxOut(
+        amount=50*100_000_000,
+        script_pubkey=p2pk_script(bob_sec),
+    )
+    bad_spend = Tx(
+        version=1,
+        tx_ins=[tx_in],
+        tx_outs=[tx_out],
+        locktime=0,
+    )
+    block = mine(Block(
+        version=1,
+        prev_block=blockchain.headers[-1].hash(),
+        merkle_root=merkle_root([coinbase.hash(), bad_spend.hash()]),  # FIXME
+        timestamp=int(time.time()),
+        bits=starting_bits,
+        nonce=b'\x00\x00\x00\x00',
+        txns=[coinbase, bad_spend],
+    ))
+    valid = False
+    hints = make_hints([
+        'this transaction spends an output that does not exist',
+    ])
+    # FIXME: check that utxo_set was updated
+    return block, valid, hints
+
+
+def first_valid_spend(blockchain):
+    coinbase = prepare_coinbase(bob_sec)
+    assert len(list(blockchain.utxo_set.keys())) == 1
+    outpoint = list(blockchain.utxo_set.keys())[0]    # FIXME
+    utxo = blockchain.utxo_set[outpoint]
+
+    tx_in = TxIn(
+        prev_tx=bytes.fromhex(outpoint[0]),
+        prev_index=outpoint[1],
+    )
+    tx_out = TxOut(
+        amount=utxo.amount - 10,
+        script_pubkey=p2pk_script(bob_sec),
+    )
+    bad_spend = Tx(
+        version=1,
+        tx_ins=[tx_in],
+        tx_outs=[tx_out],
+        locktime=0,
+    )
+
+
+
+    ### HACKS!!! ###
+    for i in range(len(bad_spend.tx_ins)):
+        bad_spend.sign_input(i, bob_sk, utxo.script_pubkey)
+    ### /HACKS!!! ###
+
+
+
+    block = mine(Block(
+        version=1,
+        prev_block=blockchain.headers[-1].hash(),
+        merkle_root=merkle_root([coinbase.hash(), bad_spend.hash()]),  # FIXME
+        timestamp=int(time.time()),
+        bits=starting_bits,
+        nonce=b'\x00\x00\x00\x00',
+        txns=[coinbase, bad_spend],
+    ))
+    valid = True
+    hints = make_hints([
+        'did utxo set update?',
+    ])
+    # FIXME: check that utxo_set was updated
+    return block, valid, hints
 
 
 def simulate():
@@ -199,6 +279,8 @@ def simulate():
         missing_coinbase,
         bad_coinbase,
         good_coinbase,
+        spend_nonexistant_output,
+        first_valid_spend,
     ]
     blockchain = Blockchain()
     for scenario in scenarios:

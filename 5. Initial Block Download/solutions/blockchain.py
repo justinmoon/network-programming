@@ -4,6 +4,8 @@ from block import BlockHeader, Block, GENESIS_BLOCK
 from helper import int_to_little_endian, little_endian_to_int, encode_varint, read_varint, target_to_bits
 
 genesis_parsed = BlockHeader.parse(BytesIO(GENESIS_BLOCK))
+SIGHASH_ALL = 1
+
 
 starting_bits = target_to_bits(16**62)  # FIXME should we pass to Blockchin class?
 
@@ -56,6 +58,10 @@ class Blockchain:
         if not block.txns[0].is_valid_coinbase():
             print('bad coinbase')
             return False
+        for tx in block.txns[1:]:
+            if not tx.verify(self.utxo_set):
+                print('invalid transaction')
+                return False
         return True
 
     def update_utxo_set(self, block):
@@ -63,8 +69,6 @@ class Blockchain:
             for index, tx_out in enumerate(tx.tx_outs):
                 outpoint = (tx.id(), index)
                 self.utxo_set[outpoint] = tx_out
-        print(self.utxo_set)
-
 
     def receive_block(self, block):
         if not self.validate_block(block):
@@ -87,7 +91,6 @@ class Blockchain:
             print(f'we now have {len(self.blocks)} blocks')
 
     def run(self):
-        print('foo')
         self.download_headers()
         self.download_blocks()
 

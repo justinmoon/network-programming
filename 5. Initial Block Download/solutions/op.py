@@ -662,6 +662,7 @@ def op_hash256(stack):
 def op_checksig(stack, z):
     # check that there are at least 2 elements on the stack
     if len(stack) < 2:
+        print('stack too small')
         return False
     # the top element of the stack is the SEC pubkey
     sec_pubkey = stack.pop()
@@ -680,6 +681,7 @@ def op_checksig(stack, z):
     if point.verify(z, sig):
         stack.append(encode_num(1))
     else:
+        print('signature verification failed')
         stack.append(encode_num(0))
     return True
 
