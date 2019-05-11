@@ -671,14 +671,22 @@ def op_checksig(stack, z):
     der_signature = stack.pop()[:-1]
     # parse the serialized pubkey and signature into objects
     try:
-        point = S256Point.parse(sec_pubkey)
-        sig = Signature.parse(der_signature)
+        # point = S256Point.parse(sec_pubkey)
+        # sig = Signature.parse(der_signature)
+        from ecdsa import VerifyingKey
+        from ecdsa.util import sigdecode_der
+        from ecdsa.ecdsa import Signature
+        from ecdsa import SECP256k1
+        vk = VerifyingKey.from_sec(sec_pubkey, curve=SECP256k1)
+        sig = Signature(*sigdecode_der(der_signature, order=SECP256k1.order))
+
     except (ValueError, SyntaxError) as e:
         LOGGER.info(e)
         return False
     # verify the signature using S256Point.verify()
     # push an encoded 1 or 0 depending on whether the signature verified
-    if point.verify(z, sig):
+    # if point.verify(z, sig):
+    if vk.pubkey.verifies(z, sig):
         stack.append(encode_num(1))
     else:
         print('signature verification failed')
