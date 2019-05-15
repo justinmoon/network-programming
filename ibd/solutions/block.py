@@ -2,9 +2,11 @@ from io import BytesIO
 from unittest import TestCase
 
 from solutions.lib import little_endian_to_int, int_to_little_endian, double_sha256, read_varint, bits_to_target
+from solutions.tx import Tx
 
 
-GENESIS_BLOCK = bytes.fromhex('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c')
+RAW_GENESIS_BLOCK = bytes.fromhex('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000')
+
 
 class BlockHeaderInitial:
 
@@ -175,3 +177,30 @@ class BlockHeaderTest(TestCase):
         block = BlockHeader.parse(stream)
         self.assertFalse(block.check_pow())
 
+
+class Block(BlockHeader):
+
+    def __init__(self, version, prev_block, merkle_root,
+                 timestamp, bits, nonce, txns):
+        BlockHeader.__init__(version, prev_block, merkle_root,
+                timestamp, bits, nonce)
+        self.txns = txns
+
+    @classmethod
+    def parse(cls, s):
+        block = BlockHeader.parse(s)  # FIXME
+        # num_txns - varint
+        num_txns = read_varint(s)
+        # num_txns many transactions remain
+        block.txns = []
+        for _ in range(num_txns):
+            block.txns.append(Tx.parse(s))
+        return block
+
+
+class BlockTest(TestCase):
+
+    def test_parse(self):
+        raw_block = bytes.fromhex('010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000')
+        block = Block.parse(BytesIO(raw_block))
+        self.assertEqual(len(block.txns), 1)

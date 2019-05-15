@@ -48,6 +48,10 @@ def compute_checksum(s):
     return double_sha256(s)[:4]
 
 
+def hash160(s):
+    return hashlib.new('ripemd160', hashlib.sha256(s).digest()).digest()
+
+
 def bytes_to_ip(b):
     if b[:6] == ONION_PREFIX:  # Tor
         return b32encode(b[6:]).lower().decode("ascii") + ".onion"
