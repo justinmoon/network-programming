@@ -6,6 +6,7 @@ from io import BytesIO
 from random import randint
 from base64 import b32decode, b32encode
 from pprint import pprint
+from unittest import TestCase, TestSuite, TextTestRunner
 
 
 NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
@@ -15,6 +16,12 @@ NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
 IPV4_PREFIX = b"\x00" * 10 + b"\x00" * 2
 ONION_PREFIX = b"\xFD\x87\xD8\x7E\xEB\x43"  # ipv6 prefix for .onion address
 TIMEOUT = 5
+
+
+def run(test):
+    suite = TestSuite()
+    suite.addTest(test)
+    TextTestRunner().run(suite)
 
 
 def little_endian_to_int(b):
@@ -258,3 +265,33 @@ def handshake(address):
     print("Sent verack")
 
     return sock
+
+
+def bits_to_target_initial(bits):
+    '''Turns bits into a target (large 256-bit integer)'''
+    # last byte is exponent
+    # the first three bytes are the coefficient in little endian
+    # the formula is:
+    # coefficient * 256**(exponent-3)
+    raise NotImplementedError()
+
+
+def bits_to_target(bits):
+    '''Turns bits into a target (large 256-bit integer)'''
+    # last byte is exponent
+    exponent = bits[-1]
+    # the first three bytes are the coefficient in little endian
+    coefficient = little_endian_to_int(bits[:-1])
+    # the formula is:
+    # coefficient * 256**(exponent-3)
+    return coefficient * 256**(exponent - 3)
+
+class LibraryTest(TestCase):
+
+    def test_bits_to_target(self):
+        pass
+        expected_target = 26959535291011309493156476344723991336010898738574164086137773096960
+        calculated_target = bits_to_target(b'\xff\xff\x00\x1d')
+        self.assertEqual(expected_target, calculated_target)
+        
+

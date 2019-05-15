@@ -5,13 +5,14 @@ from random import randint
 from socket import create_connection
 from unittest import TestCase
 
-from lib import (
+from solutions.lib import (
     double_sha256,
     serialize_varint,
     int_to_little_endian,
     little_endian_to_int,
     read_varint,
 )
+from solutions.block import BlockHeader
 
 
 NETWORK_MAGIC = b'\xf9\xbe\xb4\xd9'
@@ -159,6 +160,161 @@ class VerAckMessage:
 
     def serialize(self):
         return b''
+
+class GetHeadersMessageInitial:
+    command = b'getheaders'
+
+    def __init__(self, version=70015, num_hashes=1, start_block=None, end_block=None):
+        self.version = version
+        self.num_hashes = num_hashes
+        if start_block is None:
+            raise RuntimeError('a start block is required')
+        self.start_block = start_block
+        if end_block is None:
+            self.end_block = b'\x00' * 32
+        else:
+            self.end_block = end_block
+
+    def serialize(self):
+        '''Serialize this message to send over the network'''
+        # protocol version is 4 bytes little-endian
+        # number of hashes is a varint
+        # start block is in little-endian
+        # end block is also in little-endian
+        raise NotImplementedError
+
+class GetHeadersMessage:
+    command = b'getheaders'
+
+    def __init__(self, version=70015, num_hashes=1, start_block=None, end_block=None):
+        self.version = version
+        self.num_hashes = num_hashes
+        if start_block is None:
+            raise RuntimeError('a start block is required')
+        self.start_block = start_block
+        if end_block is None:
+            self.end_block = b'\x00' * 32
+        else:
+            self.end_block = end_block
+
+    def serialize(self):
+        '''Serialize this message to send over the network'''
+        # protocol version is 4 bytes little-endian
+        result = int_to_little_endian(self.version, 4)
+        # number of hashes is a varint
+        result += serialize_varint(self.num_hashes)
+        # start block is in little-endian
+        result += self.start_block[::-1]
+        # end block is also in little-endian
+        result += self.end_block[::-1]
+        return result
+
+
+class GetHeadersMessageTest(TestCase):
+
+    def test_serialize(self):
+        block_hex = '0000000000000000001237f46acddf58578a37e213d2a6edc4884a2fcad05ba3'
+        gh = GetHeadersMessage(start_block=bytes.fromhex(block_hex))
+        self.assertEqual(gh.serialize().hex(), '7f11010001a35bd0ca2f4a88c4eda6d213e2378a5758dfcd6af437120000000000000000000000000000000000000000000000000000000000000000000000000000000000')
+
+
+class HeadersMessageInitial:
+    command = b'headers'
+
+    def __init__(self, blocks):
+        self.blocks = blocks
+
+    @classmethod
+    def parse(cls, stream):
+        return stream.getvalue()
+
+
+class HeadersMessage:
+    command = b'headers'
+
+    def __init__(self, headers):
+        self.headers = headers
+
+    @classmethod
+    def parse(cls, stream):
+        # number of headers is in a varint
+        num_headers = read_varint(stream)
+        # initialize the headers array
+        headers = []
+        # loop through number of headers times
+        for _ in range(num_headers):
+            # add a block to the headers array by parsing the stream
+            headers.append(BlockHeader.parse(stream))
+            # read the next varint (num_txs)
+            num_txs = read_varint(stream)
+            # num_txs should be 0 or raise a RuntimeError
+            if num_txs != 0:
+                raise RuntimeError('number of txs not 0')
+        # return a class instance
+        return cls(headers)
+
+
+class HeadersMessageTest(TestCase):
+
+    def test_parse(self):
+        hex_msg = '0200000020df3b053dc46f162a9b00c7f0d5124e2676d47bbe7c5d0793a500000000000000ef445fef2ed495c275892206ca533e7411907971013ab83e3b47bd0d692d14d4dc7c835b67d8001ac157e670000000002030eb2540c41025690160a1014c577061596e32e426b712c7ca00000000000000768b89f07044e6130ead292a3f51951adbd2202df447d98789339937fd006bd44880835b67d8001ade09204600'
+        stream = BytesIO(bytes.fromhex(hex_msg))
+        headers_msg = HeadersMessage.parse(stream)
+        self.assertEqual(len(headers_msg.headers), 2)
+        for b in headers_msg.headers:
+            self.assertEqual(b.__class__, BlockHeader)
+
+
+class GetDataMessage:
+    command = b'getdata'
+
+    def __init__(self):
+        self.data = []
+
+    def add_block(self, identifier):
+        # https://en.bitcoin.it/wiki/Protocol_documentation#Inventory_Vectors
+        self.data.append((2, identifier))
+
+    def serialize(self):
+        # start with the number of items as a varint
+        # loop through each tuple (data_type, identifier) in self.data
+        # data type is 4 bytes Little-Endian
+        # identifier needs to be in Little-Endian
+        raise NotImplementedError()
+
+
+class GetDataMessage:
+    command = b'getdata'
+
+    def __init__(self):
+        self.data = []
+
+    def add_block(self, identifier):
+        # 2 is the block identifier
+        self.data.append((2, identifier))
+
+    def serialize(self):
+        # start with the number of items as a varint
+        result = serialize_varint(len(self.data))
+        # loop through each tuple (data_type, identifier) in self.data
+        for data_type, identifier in self.data:
+            # data type is 4 bytes Little-Endian
+            result += int_to_little_endian(data_type, 4)
+            # identifier needs to be in Little-Endian
+            result += identifier[::-1]
+        return result
+
+
+class GetDataMessageTest(TestCase):
+
+    def test_serialize(self):
+        hex_msg = '020200000030eb2540c41025690160a1014c577061596e32e426b712c7ca00000000000000020000001049847939585b0652fba793661c361223446b6fc41089b8be00000000000000'
+        get_data = GetDataMessage()
+        block1 = bytes.fromhex('00000000000000cac712b726e4326e596170574c01a16001692510c44025eb30')
+        get_data.add_block(block1)
+        block2 = bytes.fromhex('00000000000000beb88910c46f6b442312361c6693a7fb52065b583979844910')
+        get_data.add_block(block2)
+        self.assertEqual(get_data.serialize().hex(), hex_msg)
 
 
 class PeerConnection:
