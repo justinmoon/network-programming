@@ -2,10 +2,14 @@ from io import BytesIO
 
 from solutions.network import PeerConnection, GetHeadersMessage, HeadersMessage, GetDataMessage, BlockMessage
 from solutions.block import RAW_GENESIS_BLOCK, BlockHeader, Block
+from lib import target_to_bits
 
 
 GENESIS_HEADER = BlockHeader.parse(BytesIO(RAW_GENESIS_BLOCK))
 GENESIS_BLOCK = Block.parse(BytesIO(RAW_GENESIS_BLOCK))
+
+
+starting_bits = target_to_bits(16**62)
 
 
 class BitcoinNode:
@@ -13,6 +17,7 @@ class BitcoinNode:
     def __init__(self):
         self.headers = [GENESIS_HEADER]
         self.blocks = [GENESIS_BLOCK]
+        self.utxo_set = {}
         self.peer = None
 
     def connect(self, host, port):
@@ -23,6 +28,9 @@ class BitcoinNode:
         # TODO: verify hash matches
         # TODO: check proof-of-work
         # append block headers received to headers array
+        previous = self.headers[-1]
+        if header.prev_block != previous.hash():
+            raise RuntimeError('discontinuous block at {}'.format(len(self.headers)))
         self.headers.append(header)
 
     def request_headers(self):
@@ -37,9 +45,38 @@ class BitcoinNode:
             self.receive_header(header)
         print(f'we now have {len(self.headers)} headers')
 
+    def validate_block(self, block):
+        if block.bits != starting_bits:
+            print('bad bits')
+            return False
+        if not block.check_pow():
+            print('bad pow')
+            return False
+        if not len(block.txns):
+            print('missing coinbase')
+            return False
+        if not block.txns[0].is_valid_coinbase():
+            print('bad coinbase')
+            return False
+        for tx in block.txns[1:]:
+            if not tx.verify(self.utxo_set):
+                print('invalid transaction')
+                return False
+        return True
+
+    def update_utxo_set(self, block):
+        for tx in block.txns:
+            for index, tx_out in enumerate(tx.tx_outs):
+                outpoint = (tx.id(), index)
+                self.utxo_set[outpoint] = tx_out
+
     def receive_block(self, block):
-        # TODO: verify hash matches
-        self.blocks.append(block)
+        if not self.validate_block(block):
+            return False
+        else:
+            self.update_utxo_set(block)
+            self.blocks.append(block)
+            return True
 
     def request_blocks(self):
         # request 100 blocks
@@ -50,7 +87,7 @@ class BitcoinNode:
             getdata.add_block(header.hash())
         self.peer.send(getdata)
 
-        # wait for 10 blocks (FIXME)
+        # wait for 100 blocks (FIXME)
         for _ in range(100):
             block_message = self.peer.wait_for(BlockMessage)
             self.receive_block(block_message.block)

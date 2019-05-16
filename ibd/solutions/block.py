@@ -182,7 +182,7 @@ class Block(BlockHeader):
 
     def __init__(self, version, prev_block, merkle_root,
                  timestamp, bits, nonce, txns):
-        BlockHeader.__init__(version, prev_block, merkle_root,
+        BlockHeader.__init__(self, version, prev_block, merkle_root,
                 timestamp, bits, nonce)
         self.txns = txns
 

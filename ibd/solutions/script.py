@@ -18,6 +18,11 @@ from logging import getLogger
 LOGGER = getLogger(__name__)
 
 
+def p2pk_script(sec_pubkey):
+    '''Takes a sec_pubkey and returns the p2pk ScriptPubKey'''
+    return Script([sec_pubkey, 0xac])
+
+
 class Script:
 
     def __init__(self, cmds=None):
@@ -85,6 +90,85 @@ class Script:
             raise SyntaxError('parsing script failed')
         return cls(cmds)
 
+    def raw_serialize(self):
+        # initialize what we'll send back
+        result = b''
+        # go through each cmd
+        for cmd in self.cmds:
+            # if the cmd is an integer, it's an opcode
+            if type(cmd) == int:
+                # turn the cmd into a single byte integer using int_to_little_endian
+                result += int_to_little_endian(cmd, 1)
+            else:
+                # otherwise, this is an element
+                # get the length in bytes
+                length = len(cmd)
+                # for large lengths, we have to use a pushdata opcode
+                if length < 75:
+                    # turn the length into a single byte integer
+                    result += int_to_little_endian(length, 1)
+                elif length > 75 and length < 0x100:
+                    # 76 is pushdata1
+                    result += int_to_little_endian(76, 1)
+                    result += int_to_little_endian(length, 1)
+                elif length >= 0x100 and length <= 520:
+                    # 77 is pushdata2
+                    result += int_to_little_endian(77, 1)
+                    result += int_to_little_endian(length, 2)
+                else:
+                    raise ValueError('too long an cmd')
+                result += cmd
+        return result
+
+    def serialize(self):
+        # get the raw serialization (no prepended length)
+        result = self.raw_serialize()
+        # get the length of the whole thing
+        total = len(result)
+        # serialize_varint the total length of the result and prepend
+        return serialize_varint(total) + result
+
+    def evaluate(self, z):
+        # create a copy as we may need to add to this list if we have a
+        # RedeemScript
+        cmds = self.cmds[:]
+        stack = []
+        altstack = []
+        while len(cmds) > 0:
+            cmd = cmds.pop(0)
+            if type(cmd) == int:
+                # do what the opcode says
+                operation = OP_CODE_FUNCTIONS[cmd]
+                if cmd in (99, 100):
+                    # op_if/op_notif require the cmds array
+                    if not operation(stack, cmds):
+                        LOGGER.info('bad op: {}'.format(OP_CODE_NAMES[cmd]))
+                        return False
+                elif cmd in (107, 108):
+                    # op_toaltstack/op_fromaltstack require the altstack
+                    if not operation(stack, altstack):
+                        LOGGER.info('bad op: {}'.format(OP_CODE_NAMES[cmd]))
+                        return False
+                elif cmd in (172, 173, 174, 175):
+                    # these are signing operations, they need a sig_hash
+                    # to check against
+                    if not operation(stack, z):
+                        LOGGER.info('bad op: {}'.format(OP_CODE_NAMES[cmd]))
+                        return False
+                else:
+                    if not operation(stack):
+                        LOGGER.info('bad op: {}'.format(OP_CODE_NAMES[cmd]))
+                        return False
+            else:
+                # add the cmd to the stack
+                stack.append(cmd)
+        if len(stack) == 0:
+            return False
+        if stack.pop() == b'':
+            return False
+        return True
+
+
 class ScriptTest(TestCase):
 
     def test_parse(self):
@@ -95,3 +179,22 @@ class ScriptTest(TestCase):
         want = bytes.fromhex('035d5c93d9ac96881f19ba1f686f15f009ded7c62efe85a872e6a19b43c15a2937')
         self.assertEqual(script.cmds[1], want)
 
+    def test_p2pk_script(self):
+        from ecc import PrivateKey, N
+        from random import randint
+
+        # public key
+        secret = randint(0, N)
+        pk = PrivateKey(secret)
+        sec = pk.point.sec(compressed=False)
+
+        # signature
+        z = randint(0, 2**256)
+        sig = pk.sign(z)
+        der = sig.der() + b'\x01'  # append SIGHASH_ALL
+
+        # construct and verify P2PK script
+        script_pubkey = p2pk_script(sec)
+        script_sig = Script([der])
+        combined_script = script_sig + script_pubkey
+        self.assertTrue(combined_script.evaluate(z))
