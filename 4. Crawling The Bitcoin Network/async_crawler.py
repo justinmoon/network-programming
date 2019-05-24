@@ -1,17 +1,14 @@
 from io import BytesIO
-import time
 
 import asyncio
 
 from async_lib import (
-    read_msg, 
-    serialize_msg, 
-    serialize_version_payload, 
+    read_msg,
+    serialize_msg,
     read_addr_payload,
     query_dns_seeds,
     handshake,
 )
-
 
 
 async def get_peers(reader, writer):
@@ -19,7 +16,6 @@ async def get_peers(reader, writer):
     while True:
         msg = await read_msg(reader)
         command = msg['command']
-        payload_len = len(msg['payload'])
 
         # Respond to "ping"
         if command == b'ping':
@@ -37,10 +33,11 @@ async def get_peers(reader, writer):
     return []
 
 
-async def visit(loop, address, online):
+async def visit(loop, address, online, offline):
     writer = None
     try:
-        reader, writer = await asyncio.wait_for(handshake(loop, address), timeout=1)
+        reader, writer = await asyncio.wait_for(
+                handshake(loop, address), timeout=1)
         online.add(address)
         print('handshake successful')
         peers = await asyncio.wait_for(get_peers(reader, writer), timeout=30)
@@ -50,19 +47,24 @@ async def visit(loop, address, online):
     except Exception as e:
         # raise
         print(e)
+        offline.add(address)
         return []
-    
+
     finally:
         if writer:
             writer.close()
 
 
-async def worker(loop, q, online):
+async def worker(loop, q, online, offline):
     while True:
+        # get another address we haven't contacted yet
         address = await q.get()
-        print(f'queue size: {q.qsize()} online: {len(online)}' )
-        peers = await visit(loop, address, online)
-
+        while address in online or address in offline:
+            address = await q.get()
+        # connect
+        peers = await visit(loop, address, online, offline)
+        print(f'queue size: {q.qsize()} online: {len(online)} offline: {len(offline)}' )
+        # schedule connections to their peers
         for peer in peers:
             await q.put(peer)
 
@@ -71,6 +73,7 @@ async def fill_queue(q):
     addresses = query_dns_seeds()
     for address in addresses:
         await q.put(address)
+    print('q filled')
 
 
 def main():
@@ -78,7 +81,7 @@ def main():
 
     online = set()
     offline = set()
-    num_workers = 500
+    num_workers = 5
     q = asyncio.Queue()
 
     # start as many workers as we receive dns seeds
@@ -87,6 +90,7 @@ def main():
     for address in range(num_workers):
         tasks.append(loop.create_task(worker(loop, q, online, offline)))
 
+    print('running')
     loop.run_until_complete(asyncio.gather(*tasks))
     loop.close()
 
