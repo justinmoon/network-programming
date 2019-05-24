@@ -2,8 +2,8 @@ import asyncio
 
 
 async def tcp_echo_client(message, loop):
-    reader, writer = await asyncio.open_connection('127.0.0.1', 8888,
-                                                   loop=loop)
+    reader, writer = await asyncio.open_connection(
+            '127.0.0.1', 9999, loop=loop)
 
     print('Send: %r' % message)
     writer.write(message.encode())
@@ -15,7 +15,7 @@ async def tcp_echo_client(message, loop):
     writer.close()
 
 
-message = 'Hello World!'
+message = 'Hello!'
 loop = asyncio.get_event_loop()
 loop.run_until_complete(tcp_echo_client(message, loop))
 loop.close()
