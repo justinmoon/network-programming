@@ -1,123 +1,111 @@
-
 ##############
 ### Lesson ###
 ##############
 
-# Ex 1: Ping-Pong
+# Connect to ping pong server using Python
 
-import socket
+def ping(ip, port):
+    sock = socket.socket()
+    sock.connect((ip, port))
+    sock.send(b"ping")
+    return sock.recv(1024)
 
-sock = socket.socket()
-sock.connect(("68.183.109.101", 10000))
-sock.send(b"ping")
-response = sock.recv(1024)
-print("Response: ", response)
+# fill in "start" and "stop indices for "checksum" field
 
-# Ex 2: Spotting mainnet & testnet messages
+start = 4 + 12 + 4
+stop = start + 4
+print('4 "checksum" bytes:', VERSION[start:stop])
 
-def is_mainnet_msg(stream):
-    magic = read_magic(stream)
-    return magic == b"\xf9\xbe\xb4\xd9"
-
-def is_testnet_msg(stream):
-    magic = read_magic(stream)
-    return magic == b"\x0b\x11\x09\x07"
-
-# Ex 3: Spotting version & verack messages
-
-def read_command(stream):
-    raw = stream.read(12)
-    command = raw.replace(b"\x00", b"")  # remove empty byte padding
-    return command
-    
-def is_version_msg(stream):
-    command = read_command(stream)
-    return command == b"version"
-    
-def is_verack_msg(stream):
-    command = read_command(stream)
-    return "FIXME"
-
-# Ex 4: Read message length
-
-def read_length(stream):
-    raw = stream.read(4)
-    length = int.from_bytes(raw, 'little')
-    return length
-
-# Ex 5: Read checksum
-
-def read_checksum(stream):
-    return stream.read(4)
-
-# Ex 6: Read payload
-
-def read_payload(stream, length):
-    return stream.read(length)
-
-# Ex 7: Double SHA256
-
-def hash256(b):
-    first_round = sha256(b).digest()
-    second_round = sha256(first_round).digest()
-    return second_round
-
-# Ex 8: Compute checksum
-
-def compute_checksum(b):
-    hashed = hash256(b)
-    first_four_bytes = hashed[:4]
-    return first_four_bytes
-
-# Ex 9: Bad magic throws error
+# Check Network Magic
 
 def read_message(stream):
-    magic = read_magic(stream)
-    if magic != NETWORK_MAGIC:
-        raise RuntimeError('Network magic is wrong')
-    command = read_command(stream)
-    length = read_length(stream)
-    checksum = read_checksum(stream)
-    payload = read_payload(stream, length)
-    return command, payload
+    magic = stream.read(4)
+    ...
 
-# Ex 10: Bad checksum throws error
+# Which is a testnet message, which is a mainnet message?
+
+# m1 is a mainnet message, m2 is a testnet message.
+# compare the "magic" values against those in the wiki
+# to see why: https://en.bitcoin.it/wiki/Protocol_documentation#Message_structure
+
+# Modify `lib.read_message` to raise a `RuntimeError` if the magic bytes are wrong
 
 def read_message(stream):
-    magic = read_magic(stream)
+    magic = stream.read(4)
     if magic != NETWORK_MAGIC:
-        raise RuntimeError('Network magic is wrong')
-    command = read_command(stream)
-    length = read_length(stream)
-    checksum = read_checksum(stream)
-    payload = read_payload(stream, length)
-    if checksum != compute_checksum(payload):
-        raise RuntimeError("Checksums don't match")
-    return command, payload
+        raise RuntimeError("bad magic")
+    ...
 
-# Ex 11: The final `NetworkEnvelope` class
+# Interpret command
 
-class NetworkEnvelope:
+def read_message(stream):
+    ...
+    command = stream.read(12).strip(b"\x00")
+    ...
 
-    def __init__(self, command, payload):
-        self.command = command
-        self.payload = payload
+# Have `read_message` read `length` and interpret it as an integer 
 
-    @classmethod
-    def from_stream(cls, stream):
-        magic = read_magic(stream)
-        if magic != NETWORK_MAGIC:
-            raise RuntimeError('Network magic is wrong')
-        command = read_command(stream)
-        length = read_length(stream)
-        checksum = read_checksum(stream)
-        payload = read_payload(stream, length)
-        if checksum != compute_checksum(payload):
-            raise RuntimeError("Checksums don't match")
-        return cls(command, payload)
+def read_message(stream):
+    ...
+    length = int.from_bytes(stream.read(4), "little")
+    ...
 
-    def __repr__(self):
-        return f"<Message command={self.command}>"
+# Have `read_message` read the `checksum`
+
+def read_message(stream):
+    ...
+    checksum = stream.read(4)
+    ...
+
+# Have `read_message` read the `payload`
+
+def read_message(stream):
+    ...
+    length = int.from_bytes(stream.read(4), "little")
+    ...
+    payload = stream.read(length)
+    ...
+
+# Implement `double_sha256` in [lib.py](./lib.py) which runs `sha256` twice on input and return `bytes` as output
+
+def double_sha256(b):
+    round_one = sha256(b).digest()
+    round_two = sha256(round_one).digest()
+    return round_two
+
+
+# Have `read_message` calculate a checksum and raise a `RuntimeError` it it doesn't match the checksum on the message
+
+def read_message(stream):
+    ...
+    length = int.from_bytes(stream.read(4), "little")
+    checksum = stream.read(4)
+    payload = stream.read(length)
+    if checksum != double_sha256(payload)[:4]:
+        raise RuntimeError("bad checksum")
+    ...
+
+
+# Complete `read_message` function
+
+def read_message(stream):
+    magic = stream.read(4)
+    if magic != NETWORK_MAGIC:
+        raise RuntimeError("bad magic")
+    command = stream.read(12).strip(b"\x00")
+    length = int.from_bytes(stream.read(4), "little")
+    checksum = stream.read(4)
+    payload = stream.read(length)
+    if checksum != double_sha256(payload)[:4]:
+        raise RuntimeError("bad checksum")
+    return {
+        "magic": magic,
+        "command": command,
+        "length": length,
+        "checksum": checksum,
+        "payload": payload,
+    }
+
 
 ################
 ### Homework ###
