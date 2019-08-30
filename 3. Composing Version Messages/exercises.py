@@ -2,6 +2,8 @@ import time
 import socket
 from random import randint
 from lib import compute_checksum
+from hashlib import sha256
+from lib import bytes_to_ip, read_varstr, read_varint, bytes_to_bool, read_version_payload
 
 ZERO = b'\x00'
 IPV4_PREFIX = b"\x00" * 10 + b"\x00" * 2
