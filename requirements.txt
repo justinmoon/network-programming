@@ -3,7 +3,7 @@ attrs==18.2.0
 autopep8==1.4.3
 backcall==0.1.0
 bitcoin-ecc==0.0.1
-bleach==3.1.0
+bleach==3.1.2
 certifi==2018.11.29
 chardet==3.0.4
 colorama==0.4.1
