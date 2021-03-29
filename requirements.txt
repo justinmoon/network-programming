@@ -51,7 +51,7 @@ py==1.7.0
 pycodestyle==2.5.0
 pydocstyle==3.0.0
 pyflakes==2.1.0
-Pygments==2.3.1
+Pygments==2.7.4
 pyparsing==2.3.1
 PySocks==1.6.8
 pytest==4.1.1
