@@ -4,7 +4,7 @@ autopep8==1.4.3
 backcall==0.1.0
 bitcoin-ecc==0.0.1
 bleach==3.1.0
-certifi==2018.11.29
+certifi==2022.12.7
 chardet==3.0.4
 colorama==0.4.1
 cycler==0.10.0
